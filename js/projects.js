@@ -1,32 +1,40 @@
 // ============================================================
-// 项目列表页
+// 项目列表页（Supabase 版）
 // ============================================================
 
-(function () {
+(async function () {
+  // 1. 要求登录
+  const user = await Auth.requireAuth();
+  if (!user) return;
+  Auth.injectNavUser();
+
   const app = document.getElementById('app');
   let activeTab = 'all';
+  let allProjects = [];
 
+  // ── 阶段样式 ─────────────────────────────────────────────
   const STAGE_COLORS = {
-    gr1: { bg: '#dbeafe', color: '#1d4ed8' },
-    gr2: { bg: '#ede9fe', color: '#6d28d9' },
-    gr3: { bg: '#fce7f3', color: '#9d174d' },
-    gr4: { bg: '#fce7f3', color: '#9d174d' },
-    gr5: { bg: '#dcfce7', color: '#166534' },
-    gr5a:{ bg: '#dcfce7', color: '#166534' },
-    gr6: { bg: '#fef9c3', color: '#854d0e' },
+    gr1:  { bg: '#dbeafe', color: '#1d4ed8' },
+    gr2:  { bg: '#ede9fe', color: '#6d28d9' },
+    gr3:  { bg: '#fce7f3', color: '#9d174d' },
+    gr4:  { bg: '#fce7f3', color: '#9d174d' },
+    gr5:  { bg: '#dcfce7', color: '#166534' },
+    gr5a: { bg: '#dcfce7', color: '#166534' },
+    gr6:  { bg: '#fef9c3', color: '#854d0e' },
   };
-
-  function getStageDisplay(stageId) {
-    const labels = { gr1:'GR1', gr2:'GR2', gr3:'GR3', gr4:'GR4', gr5:'GR5', gr5a:'GR5A', gr6:'GR6' };
-    const names  = { gr1:'规划与立项', gr2:'拓展准备', gr3:'市场拓展', gr4:'上市准备', gr5:'上市销售', gr5a:'稳定销售', gr6:'退市撤盘' };
-    return { code: labels[stageId] || stageId, name: names[stageId] || '' };
-  }
+  const STAGE_NAMES = {
+    gr1: '规划与立项', gr2: '拓展准备', gr3: '市场拓展',
+    gr4: '上市准备',  gr5: '上市销售', gr5a: '稳定销售', gr6: '退市撤盘',
+  };
+  const STAGE_CODES = { gr1:'GR1', gr2:'GR2', gr3:'GR3', gr4:'GR4', gr5:'GR5', gr5a:'GR5A', gr6:'GR6' };
 
   function renderCard(p) {
-    const stageColors = STAGE_COLORS[p.currentStage] || { bg: '#f1f5f9', color: '#475569' };
-    const { code, name } = getStageDisplay(p.currentStage);
-    const commitCount = (p.commits || []).length;
+    const stage = p.current_stage || 'gr1';
+    const colors = STAGE_COLORS[stage] || { bg: '#f1f5f9', color: '#475569' };
+    const code  = STAGE_CODES[stage]  || stage.toUpperCase();
+    const sname = STAGE_NAMES[stage]  || '';
     const statusMap = { active: '进行中', hold: '暂停', done: '已完成' };
+    const cnt = p.commitCount || 0;
 
     const card = document.createElement('a');
     card.className = `proj-card status-${p.status || 'active'}`;
@@ -34,30 +42,32 @@
     card.innerHTML = `
       <div class="proj-card-top">
         <span class="proj-code">${p.code || ''}</span>
-        <span class="proj-stat">${commitCount} 条记录</span>
+        <span class="proj-stat">${cnt} 条记录</span>
       </div>
       <div class="proj-name">${p.name}</div>
       <div class="proj-desc">${p.description || '暂无描述'}</div>
       <div class="proj-meta">
-        <span class="proj-stage-badge" style="background:${stageColors.bg};color:${stageColors.color}">
+        <span class="proj-stage-badge" style="background:${colors.bg};color:${colors.color}">
           <span class="proj-status-dot"></span>
-          ${code} ${name}
+          ${code} ${sname}
         </span>
         <span class="proj-stat">${statusMap[p.status] || '进行中'}</span>
-        <span class="proj-updated">更新于 ${formatRelativeTime(p.updatedAt || p.createdAt)}</span>
-      </div>
-    `;
+        <span class="proj-updated">更新于 ${formatRelativeTime(p.updated_at || p.created_at)}</span>
+      </div>`;
     return card;
   }
 
-  function renderGrid(container) {
-    container.innerHTML = '';
-    let projects = Store.getProjects();
-    if (activeTab === 'active') projects = projects.filter(p => p.status === 'active');
-    if (activeTab === 'done')   projects = projects.filter(p => p.status === 'done');
+  function getFiltered() {
+    if (activeTab === 'active') return allProjects.filter(p => p.status === 'active');
+    if (activeTab === 'done')   return allProjects.filter(p => p.status === 'done');
+    return allProjects;
+  }
 
+  function renderGrid(grid) {
+    grid.innerHTML = '';
+    const projects = getFiltered();
     if (projects.length === 0) {
-      container.innerHTML = `
+      grid.innerHTML = `
         <div class="proj-empty">
           <div class="proj-empty-icon">📂</div>
           <div class="proj-empty-text">暂无项目</div>
@@ -65,7 +75,7 @@
         </div>`;
       return;
     }
-    projects.forEach(p => container.appendChild(renderCard(p)));
+    projects.forEach(p => grid.appendChild(renderCard(p)));
   }
 
   // ── 新建项目 Modal ────────────────────────────────────────
@@ -115,6 +125,7 @@
               <input class="form-input" id="inp-gtm" placeholder="姓名（职位）" />
             </div>
           </div>
+          <div class="modal-err" id="modal-err" style="display:none;color:#ef4444;font-size:12px;margin-top:4px"></div>
         </div>
         <div class="modal-footer">
           <button class="btn-ghost" id="cancelModal">取消</button>
@@ -122,84 +133,98 @@
         </div>
       </div>`;
 
-    document.getElementById('closeModal')?.remove();
     overlay.querySelector('#closeModal').addEventListener('click', () => overlay.remove());
     overlay.querySelector('#cancelModal').addEventListener('click', () => overlay.remove());
     overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 
-    overlay.querySelector('#confirmCreate').addEventListener('click', () => {
+    overlay.querySelector('#confirmCreate').addEventListener('click', async () => {
       const name = overlay.querySelector('#inp-name').value.trim();
       const code = overlay.querySelector('#inp-code').value.trim().toUpperCase();
-      if (!name || !code) { alert('请填写项目名称和产品代码'); return; }
-      const project = Store.createProject({
-        name,
-        code,
-        currentStage: overlay.querySelector('#inp-stage').value,
-        description: overlay.querySelector('#inp-desc').value.trim(),
-        pdtLead: overlay.querySelector('#inp-pdt').value.trim(),
-        gtmLead: overlay.querySelector('#inp-gtm').value.trim(),
-      });
-      overlay.remove();
-      onCreated(project);
+      const errEl = overlay.querySelector('#modal-err');
+      if (!name || !code) {
+        errEl.textContent = '请填写项目名称和产品代码';
+        errEl.style.display = 'block';
+        return;
+      }
+      const btn = overlay.querySelector('#confirmCreate');
+      btn.disabled = true;
+      btn.textContent = '创建中…';
+      errEl.style.display = 'none';
+
+      try {
+        const project = await Store.createProject({
+          name,
+          code,
+          currentStage: overlay.querySelector('#inp-stage').value,
+          description: overlay.querySelector('#inp-desc').value.trim(),
+          pdtLead: overlay.querySelector('#inp-pdt').value.trim(),
+          gtmLead: overlay.querySelector('#inp-gtm').value.trim(),
+        }, user.id);
+        overlay.remove();
+        onCreated(project);
+      } catch (err) {
+        errEl.textContent = '创建失败：' + (err.message || '请稍后重试');
+        errEl.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = '创建项目';
+      }
     });
 
     return overlay;
   }
 
-  // ── 主渲染 ───────────────────────────────────────────────────
-  function render() {
-    const page = document.createElement('div');
-    page.className = 'page';
+  // ── 主渲染 ─────────────────────────────────────────────────
+  const page = document.createElement('div');
+  page.className = 'page';
 
-    // Header
-    const header = document.createElement('div');
-    header.className = 'proj-list-header';
-    header.innerHTML = `
-      <div>
-        <div class="page-title">项目</div>
-        <div class="page-subtitle">管理所有 IPD / IPMS 产品项目及其动态记录</div>
-      </div>`;
+  // Header
+  const header = document.createElement('div');
+  header.className = 'proj-list-header';
+  header.innerHTML = `
+    <div>
+      <div class="page-title">项目</div>
+      <div class="page-subtitle">管理所有 IPD / IPMS 产品项目及其动态记录</div>
+    </div>`;
+  const createBtn = document.createElement('button');
+  createBtn.className = 'btn-primary';
+  createBtn.textContent = '＋ 新建项目';
+  header.appendChild(createBtn);
+  page.appendChild(header);
 
-    const createBtn = document.createElement('button');
-    createBtn.className = 'btn-primary';
-    createBtn.innerHTML = '＋ 新建项目';
-    header.appendChild(createBtn);
-    page.appendChild(header);
-
-    // Tabs
-    const tabs = document.createElement('div');
-    tabs.className = 'proj-tabs';
-    [['all','全部'], ['active','进行中'], ['done','已完成']].forEach(([id, label]) => {
-      const btn = document.createElement('button');
-      btn.className = `proj-tab${activeTab === id ? ' active' : ''}`;
-      btn.textContent = label;
-      btn.addEventListener('click', () => {
-        activeTab = id;
-        tabs.querySelectorAll('.proj-tab').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        renderGrid(grid);
-      });
-      tabs.appendChild(btn);
+  // Tabs
+  const tabs = document.createElement('div');
+  tabs.className = 'proj-tabs';
+  [['all','全部'], ['active','进行中'], ['done','已完成']].forEach(([id, label]) => {
+    const btn = document.createElement('button');
+    btn.className = `proj-tab${activeTab === id ? ' active' : ''}`;
+    btn.textContent = label;
+    btn.addEventListener('click', () => {
+      activeTab = id;
+      tabs.querySelectorAll('.proj-tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      renderGrid(grid);
     });
-    page.appendChild(tabs);
+    tabs.appendChild(btn);
+  });
+  page.appendChild(tabs);
 
-    // Grid
-    const grid = document.createElement('div');
-    grid.className = 'proj-grid';
-    renderGrid(grid);
-    page.appendChild(grid);
+  // Grid (initially shows loading)
+  const grid = document.createElement('div');
+  grid.className = 'proj-grid';
+  grid.innerHTML = `<div class="proj-empty"><div class="proj-empty-text" style="color:#94a3b8">加载中…</div></div>`;
+  page.appendChild(grid);
 
-    // Create button handler
-    createBtn.addEventListener('click', () => {
-      const modal = buildCreateModal(project => {
-        renderGrid(grid);
-        window.location.href = `project.html?id=${project.id}`;
-      });
-      document.body.appendChild(modal);
+  app.appendChild(page);
+
+  // Load from Supabase
+  allProjects = await Store.getProjects();
+  renderGrid(grid);
+
+  // Create button
+  createBtn.addEventListener('click', () => {
+    const modal = buildCreateModal(project => {
+      window.location.href = `project.html?id=${project.id}`;
     });
-
-    app.appendChild(page);
-  }
-
-  render();
+    document.body.appendChild(modal);
+  });
 })();

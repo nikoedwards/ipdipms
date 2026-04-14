@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>登录 — IPMS 学习平台</title>
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    body {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: #0f172a;
+    }
+
+    /* ── Auth page layout ──────────────────────────────────── */
+    .auth-wrap {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 16px;
+    }
+
+    .auth-card {
+      width: 100%;
+      max-width: 400px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 36px 32px 32px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.5);
+    }
+
+    /* ── Logo / brand ───────────────────────────────────────── */
+    .auth-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 28px;
+    }
+    .auth-brand-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: #3b82f6;
+      flex-shrink: 0;
+    }
+    .auth-brand-name {
+      font-size: 16px;
+      font-weight: 700;
+      color: #f8fafc;
+      letter-spacing: .02em;
+    }
+
+    /* ── Tab switcher ────────────────────────────────────────── */
+    .auth-tabs {
+      display: flex;
+      background: #0f172a;
+      border-radius: 8px;
+      padding: 3px;
+      margin-bottom: 28px;
+    }
+    .auth-tab {
+      flex: 1;
+      padding: 7px 0;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 500;
+      color: #64748b;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all .15s;
+      user-select: none;
+    }
+    .auth-tab.active {
+      background: #2563eb;
+      color: #fff;
+    }
+    .auth-tab:not(.active):hover { color: #94a3b8; }
+
+    /* ── Form fields ─────────────────────────────────────────── */
+    .auth-form { display: flex; flex-direction: column; gap: 16px; }
+
+    .field-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: #94a3b8;
+      margin-bottom: 6px;
+      letter-spacing: .03em;
+    }
+
+    .field-input {
+      width: 100%;
+      padding: 10px 12px;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 7px;
+      font-size: 14px;
+      color: #f1f5f9;
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+      font-family: inherit;
+    }
+    .field-input::placeholder { color: #475569; }
+    .field-input:focus {
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59,130,246,.15);
+    }
+
+    /* ── Submit button ───────────────────────────────────────── */
+    .auth-btn {
+      width: 100%;
+      padding: 11px;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 7px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 4px;
+      transition: background .15s, transform .1s;
+      font-family: inherit;
+    }
+    .auth-btn:hover { background: #1d4ed8; }
+    .auth-btn:active { transform: scale(.98); }
+    .auth-btn:disabled {
+      background: #334155;
+      color: #64748b;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* ── Status messages ─────────────────────────────────────── */
+    .auth-msg {
+      font-size: 13px;
+      padding: 10px 12px;
+      border-radius: 7px;
+      display: none;
+    }
+    .auth-msg.error {
+      display: block;
+      background: rgba(239,68,68,.12);
+      border: 1px solid rgba(239,68,68,.3);
+      color: #fca5a5;
+    }
+    .auth-msg.success {
+      display: block;
+      background: rgba(34,197,94,.12);
+      border: 1px solid rgba(34,197,94,.3);
+      color: #86efac;
+    }
+
+    /* ── Footer hint ─────────────────────────────────────────── */
+    .auth-footer {
+      margin-top: 20px;
+      text-align: center;
+      font-size: 12px;
+      color: #475569;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="auth-wrap">
+    <div class="auth-card">
+
+      <div class="auth-brand">
+        <span class="auth-brand-dot"></span>
+        <span class="auth-brand-name">IPMS 学习平台</span>
+      </div>
+
+      <div class="auth-tabs">
+        <div class="auth-tab active" id="tabLogin" onclick="switchTab('login')">登录</div>
+        <div class="auth-tab" id="tabRegister" onclick="switchTab('register')">注册</div>
+      </div>
+
+      <!-- Login form -->
+      <form class="auth-form" id="loginForm" onsubmit="handleLogin(event)">
+        <div>
+          <label class="field-label">邮箱</label>
+          <input class="field-input" type="email" id="loginEmail" placeholder="your@email.com" required autocomplete="email">
+        </div>
+        <div>
+          <label class="field-label">密码</label>
+          <input class="field-input" type="password" id="loginPassword" placeholder="••••••••" required autocomplete="current-password">
+        </div>
+        <div class="auth-msg" id="loginMsg"></div>
+        <button class="auth-btn" type="submit" id="loginBtn">登录</button>
+      </form>
+
+      <!-- Register form (hidden by default) -->
+      <form class="auth-form" id="registerForm" style="display:none" onsubmit="handleRegister(event)">
+        <div>
+          <label class="field-label">姓名</label>
+          <input class="field-input" type="text" id="regName" placeholder="你的名字" required autocomplete="name">
+        </div>
+        <div>
+          <label class="field-label">邮箱</label>
+          <input class="field-input" type="email" id="regEmail" placeholder="your@email.com" required autocomplete="email">
+        </div>
+        <div>
+          <label class="field-label">密码</label>
+          <input class="field-input" type="password" id="regPassword" placeholder="至少 6 位" required minlength="6" autocomplete="new-password">
+        </div>
+        <div class="auth-msg" id="registerMsg"></div>
+        <button class="auth-btn" type="submit" id="registerBtn">注册账号</button>
+      </form>
+
+      <p class="auth-footer">登录即表示你接受平台使用条款</p>
+    </div>
+  </div>
+
+  <!-- Supabase SDK -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="js/supabase-client.js"></script>
+  <script src="js/auth.js"></script>
+  <script>
+    // ── If already logged in, redirect immediately ──────────────
+    (async () => {
+      const session = await Auth.getSession();
+      if (session) {
+        const params = new URLSearchParams(window.location.search);
+        window.location.href = params.get('redirect') || 'projects.html';
+      }
+    })();
+
+    // ── Tab toggle ──────────────────────────────────────────────
+    function switchTab(tab) {
+      const isLogin = tab === 'login';
+      document.getElementById('tabLogin').classList.toggle('active', isLogin);
+      document.getElementById('tabRegister').classList.toggle('active', !isLogin);
+      document.getElementById('loginForm').style.display = isLogin ? 'flex' : 'none';
+      document.getElementById('registerForm').style.display = isLogin ? 'none' : 'flex';
+      clearMsgs();
+    }
+
+    function clearMsgs() {
+      ['loginMsg', 'registerMsg'].forEach(id => {
+        const el = document.getElementById(id);
+        el.className = 'auth-msg';
+        el.textContent = '';
+      });
+    }
+
+    function showMsg(id, text, type) {
+      const el = document.getElementById(id);
+      el.className = `auth-msg ${type}`;
+      el.textContent = text;
+    }
+
+    // ── Login ───────────────────────────────────────────────────
+    async function handleLogin(e) {
+      e.preventDefault();
+      clearMsgs();
+      const email = document.getElementById('loginEmail').value.trim();
+      const password = document.getElementById('loginPassword').value;
+      const btn = document.getElementById('loginBtn');
+
+      btn.disabled = true;
+      btn.textContent = '登录中…';
+
+      const { error } = await Auth.signIn(email, password);
+      if (error) {
+        showMsg('loginMsg', translateError(error.message), 'error');
+        btn.disabled = false;
+        btn.textContent = '登录';
+      } else {
+        showMsg('loginMsg', '登录成功，跳转中…', 'success');
+        const params = new URLSearchParams(window.location.search);
+        setTimeout(() => {
+          window.location.href = params.get('redirect') || 'projects.html';
+        }, 600);
+      }
+    }
+
+    // ── Register ────────────────────────────────────────────────
+    async function handleRegister(e) {
+      e.preventDefault();
+      clearMsgs();
+      const name = document.getElementById('regName').value.trim();
+      const email = document.getElementById('regEmail').value.trim();
+      const password = document.getElementById('regPassword').value;
+      const btn = document.getElementById('registerBtn');
+
+      btn.disabled = true;
+      btn.textContent = '注册中…';
+
+      const { error } = await Auth.signUp(email, password, name);
+      if (error) {
+        showMsg('registerMsg', translateError(error.message), 'error');
+        btn.disabled = false;
+        btn.textContent = '注册账号';
+      } else {
+        showMsg('registerMsg', '注册成功！正在登录…', 'success');
+        // Auto sign-in after registration
+        const { error: loginErr } = await Auth.signIn(email, password);
+        if (loginErr) {
+          showMsg('registerMsg', '注册成功，请手动登录。', 'success');
+          btn.disabled = false;
+          btn.textContent = '注册账号';
+          setTimeout(() => switchTab('login'), 1500);
+        } else {
+          setTimeout(() => { window.location.href = 'projects.html'; }, 800);
+        }
+      }
+    }
+
+    // ── Friendly error messages ─────────────────────────────────
+    function translateError(msg) {
+      if (msg.includes('Invalid login credentials')) return '邮箱或密码错误';
+      if (msg.includes('Email not confirmed')) return '请先验证邮箱后再登录';
+      if (msg.includes('User already registered')) return '该邮箱已注册，请直接登录';
+      if (msg.includes('Password should be')) return '密码至少需要 6 位';
+      if (msg.includes('Unable to validate email')) return '邮箱格式不正确';
+      return msg;
+    }
+  </script>
+</body>
+</html>
