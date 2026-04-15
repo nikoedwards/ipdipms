@@ -10,6 +10,7 @@
   --hdr-mgmt-h: 36px;
   --hdr-phase-h: 44px;
   --hdr-stage-h: 58px;
+  --hdr-week-h:  32px;
   --col-role: 220px;
   --col-stage: 220px;
   --pdt-accent: #2563eb;
@@ -829,6 +830,194 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans
   transition: all .15s; font-family: inherit;
 }
 .nav-signout:hover { border-color: #475569; color: #94a3b8; background: rgba(255,255,255,.05); }
+
+/* section header inside project flow (below week row) */
+.proj-flow-outer .section-header-row {
+  top: calc(var(--hdr-mgmt-h) + var(--hdr-phase-h) + var(--hdr-stage-h) + var(--hdr-week-h));
+}
+
+/* ── Project timeline flow wrapper ──────────────────────── */
+.proj-flow-outer {
+  position: relative;   /* anchor for the today-line */
+  overflow: auto;
+  height: calc(100vh - 320px);
+  min-height: 320px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.proj-flow-outer::-webkit-scrollbar { display: none; }
+
+/* Wrapper inside outer: position:relative so today-line scrolls with content */
+.flow-grid-wrap {
+  position: relative;
+  display: inline-block;   /* shrink-wraps the grid width */
+  min-width: 100%;
+}
+
+/* ── Week row ────────────────────────────────────────────── */
+.week-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: var(--col-role) repeat(7, var(--col-stage));
+  background: #f0f9ff;
+  border-bottom: 1px solid #bae6fd;
+  position: sticky;
+  top: calc(var(--hdr-mgmt-h) + var(--hdr-phase-h) + var(--hdr-stage-h));
+  z-index: 59;
+  height: var(--hdr-week-h);
+}
+.week-corner {
+  display: flex; align-items: center; padding: 0 14px;
+  border-right: 1px solid #bae6fd;
+  font-size: 10px; font-weight: 700; color: #0369a1;
+  letter-spacing: .06em; text-transform: uppercase;
+}
+.week-cell {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600; color: #0369a1;
+  border-right: 1px solid #bae6fd;
+  cursor: pointer; gap: 4px; position: relative;
+  transition: background .12s;
+}
+.week-cell:last-child { border-right: none; }
+.week-cell:hover { background: #e0f2fe; }
+.week-cell-text { pointer-events: none; }
+.week-cell-edit {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: #e0f2fe; gap: 4px;
+  padding: 0 6px;
+}
+.week-cell-input {
+  width: 44px; text-align: center;
+  border: 1px solid #0284c7; border-radius: 4px;
+  background: #fff; color: #0f172a;
+  font-size: 11px; font-weight: 700; padding: 2px 4px;
+  outline: none; font-family: inherit;
+}
+.week-edit-hint { font-size: 10px; color: #0369a1; }
+
+/* ── Today line overlay ──────────────────────────────────── */
+.today-line {
+  position: absolute;
+  top: 0; width: 2px;
+  /* height set dynamically by JS (= wrapEl.offsetHeight) */
+  background: #ef4444;
+  z-index: 70; pointer-events: none;
+  display: none;
+}
+.today-line::after {
+  content: '今日';
+  position: absolute; top: 4px; left: 4px;
+  background: #ef4444; color: #fff;
+  font-size: 10px; font-weight: 700;
+  padding: 1px 5px; border-radius: 3px;
+  white-space: nowrap;
+}
+
+/* ── Member assign chip in role cell ─────────────────────── */
+.role-assign-area {
+  margin-top: 6px; display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+}
+.role-assign-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: #eff6ff; border: 1px solid #bfdbfe;
+  border-radius: 20px; padding: 2px 8px 2px 4px;
+  font-size: 11px; color: #1d4ed8; font-weight: 500;
+  cursor: pointer; transition: all .12s;
+  max-width: 160px;
+}
+.role-assign-chip:hover { background: #dbeafe; }
+.role-assign-avatar {
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #2563eb; color: #fff;
+  font-size: 9px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.role-assign-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 4px;
+  border: 1px dashed #cbd5e1; background: transparent;
+  color: #94a3b8; font-size: 14px; cursor: pointer;
+  transition: all .12s; line-height: 1; flex-shrink: 0;
+}
+.role-assign-btn:hover { border-color: #2563eb; color: #2563eb; background: #eff6ff; }
+
+/* ── Member picker popover ───────────────────────────────── */
+.assign-popover {
+  position: fixed; z-index: 9999;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.15);
+  width: 220px;
+  padding: 6px 0;
+  max-height: 280px; overflow-y: auto;
+}
+.assign-popover-header {
+  padding: 6px 12px 4px;
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  letter-spacing: .04em; text-transform: uppercase;
+}
+.assign-popover-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 12px; cursor: pointer;
+  transition: background .1s;
+}
+.assign-popover-item:hover { background: #f1f5f9; }
+.assign-popover-item.active { background: #eff6ff; }
+.assign-pop-avatar {
+  width: 24px; height: 24px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; color: #fff; flex-shrink: 0;
+}
+.assign-pop-name { font-size: 13px; color: var(--text-primary); font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assign-pop-tag  { font-size: 10px; color: var(--text-muted); background: #f1f5f9; padding: 1px 5px; border-radius: 4px; }
+.assign-popover-divider { height: 1px; background: var(--border); margin: 4px 0; }
+.assign-clear-btn {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 12px; cursor: pointer; color: #ef4444;
+  font-size: 12px; transition: background .1s;
+}
+.assign-clear-btn:hover { background: #fef2f2; }
+
+/* ── Project activity section below flow ─────────────────── */
+.proj-activity-section {
+  margin-top: 16px;
+}
+.proj-activity-toggle {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; color: var(--text-secondary);
+  cursor: pointer; padding: 8px 0; user-select: none;
+  border-top: 1px solid var(--border);
+}
+.proj-activity-toggle:hover { color: var(--text-primary); }
+.proj-activity-body { margin-top: 8px; }
+
+/* ── Virtual members (settings) ─────────────────────────── */
+.vm-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.vm-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; background: #f8fafc;
+  border: 1px solid var(--border); border-radius: 8px;
+}
+.vm-avatar {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: #64748b; color: #fff;
+  font-size: 11px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.vm-info { flex: 1; min-width: 0; }
+.vm-name  { font-size: 13px; font-weight: 500; color: var(--text-primary); }
+.vm-desc  { font-size: 11px; color: var(--text-muted); }
+.vm-badge { font-size: 10px; color: #64748b; background: #e2e8f0; padding: 1px 6px; border-radius: 4px; }
+.vm-del   { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 14px; padding: 2px; transition: color .12s; }
+.vm-del:hover { color: #ef4444; }
+.vm-add-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
 /* ── Responsive tweaks ────────────────────────────────────── */
 @media (max-width: 768px) {
