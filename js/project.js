@@ -38,7 +38,12 @@
   }
   function logHistory(category, action, detail) {
     const history = getHistory();
-    history.unshift({ id: Date.now(), ts: new Date().toISOString(), category, action, detail: detail || '' });
+    const userName = user.user_metadata?.name || user.user_metadata?.full_name || user.email?.split('@')[0] || '未知';
+    history.unshift({
+      id: Date.now(), ts: new Date().toISOString(),
+      category, action, detail: detail || '',
+      userName, userEmail: user.email || '',
+    });
     if (history.length > 300) history.splice(300);
     localStorage.setItem(LS_HISTORY, JSON.stringify(history));
   }
@@ -1173,36 +1178,6 @@
     renderVmSection();
     wrap.appendChild(vmSection);
 
-    // ── 职能配置 ──────────────────────────────────────────
-    const funcSection = document.createElement('div');
-    funcSection.className = 'settings-section';
-    funcSection.innerHTML = `<div class="settings-section-title">职能配置（Function Config）</div>
-      <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px">选择此项目包含的职能，禁用的职能不会出现在时间线和交付件中。</div>`;
-    const allRoles = [
-      ...PDT_ROLES.map(r => ({ ...r, team: 'PDT' })),
-      ...PCT_ROLES.map(r => ({ ...r, team: 'PCT' })),
-    ];
-    allRoles.forEach(role => {
-      const item = document.createElement('div');
-      item.className = 'func-config-item';
-      const checked = isRoleEnabled(role.id) ? 'checked' : '';
-      item.innerHTML = `
-        <div class="func-config-info">
-          <span class="func-config-badge ${role.team.toLowerCase()}">${role.team}</span>
-          <span class="func-config-name">${role.title}</span>
-          <span class="func-config-sub">${role.subtitle}</span>
-        </div>
-        <label class="toggle-switch">
-          <input type="checkbox" ${checked} />
-          <span class="toggle-slider"></span>
-        </label>`;
-      item.querySelector('input').addEventListener('change', e => {
-        setRoleEnabled(role.id, e.target.checked);
-      });
-      funcSection.appendChild(item);
-    });
-    wrap.appendChild(funcSection);
-
     // ── 危险操作 ──────────────────────────────────────────
     const dangerSection = document.createElement('div');
     dangerSection.className = 'settings-section settings-danger';
@@ -1749,8 +1724,9 @@
           const cat = catMap[h.category] || { label: h.category, color: '#64748b' };
           const item = document.createElement('div');
           item.className = 'hist-item';
+          const avatarLetter = (h.userName || '?').charAt(0).toUpperCase();
           item.innerHTML = `
-            <div class="hist-dot" style="background:${cat.color}"></div>
+            <div class="hist-avatar">${avatarLetter}</div>
             <div class="hist-body">
               <div class="hist-top">
                 <span class="hist-cat-badge" style="background:${cat.color}18;color:${cat.color}">${cat.label}</span>
@@ -1758,6 +1734,10 @@
                 <span class="hist-time">${formatRelativeTime(h.ts)}</span>
               </div>
               ${h.detail ? `<div class="hist-detail">${h.detail}</div>` : ''}
+              <div class="hist-who">
+                <span class="hist-username">${h.userName || '未知'}</span>
+                ${h.userEmail ? `<span class="hist-email">${h.userEmail}</span>` : ''}
+              </div>
             </div>`;
           histList.appendChild(item);
         });

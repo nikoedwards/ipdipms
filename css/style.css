@@ -1207,9 +1207,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans
   padding: 10px 0; border-bottom: 1px solid #f1f5f9;
 }
 .hist-item:last-child { border-bottom: none; }
-.hist-dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  flex-shrink: 0; margin-top: 5px;
+.hist-avatar {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: #2563eb; color: #fff;
+  font-size: 11px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; margin-top: 1px;
 }
 .hist-body { flex: 1; min-width: 0; }
 .hist-top {
@@ -1221,7 +1224,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans
 }
 .hist-action { font-size: 13px; font-weight: 600; color: var(--text-primary); }
 .hist-time { font-size: 11px; color: var(--text-muted); margin-left: auto; white-space: nowrap; }
-.hist-detail { font-size: 12px; color: var(--text-secondary); line-height: 1.4; }
+.hist-detail { font-size: 12px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 3px; }
+.hist-who { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+.hist-username { font-size: 11px; font-weight: 600; color: var(--text-secondary); }
+.hist-email { font-size: 11px; color: var(--text-muted); }
 
 /* ── Subnav drag-and-drop ────────────────────────────────── */
 .proj-subnav-btn[draggable="true"] { cursor: grab; }
