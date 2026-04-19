@@ -23,9 +23,35 @@
   const DEFAULT_STAGE_WEEKS = { gr1:8, gr2:12, gr3:20, gr4:12, gr5:52, gr5a:26, gr6:8 };
 
   // ── 本地存储 helpers ──────────────────────────────────────
-  const LS_WEEKS   = `ipms-stage-weeks-${projectId}`;
-  const LS_ASSIGN  = `ipms-role-assign-${projectId}`;
-  const LS_VIRTUAL = `ipms-virtual-${projectId}`;
+  const LS_WEEKS     = `ipms-stage-weeks-${projectId}`;
+  const LS_ASSIGN    = `ipms-role-assign-${projectId}`;
+  const LS_VIRTUAL   = `ipms-virtual-${projectId}`;
+  const LS_ENABLED   = `ipms-role-enabled-${projectId}`;
+  const LS_CUSTOM    = `ipms-custom-stage-${projectId}`;
+  const LS_HISTORY   = `ipms-history-${projectId}`;
+  const LS_TAB_ORDER = `ipms-tab-order-${projectId}`;
+
+  // ── 操作历史 ──────────────────────────────────────────────
+  function getHistory() {
+    try { return JSON.parse(localStorage.getItem(LS_HISTORY) || '[]'); }
+    catch { return []; }
+  }
+  function logHistory(category, action, detail) {
+    const history = getHistory();
+    history.unshift({ id: Date.now(), ts: new Date().toISOString(), category, action, detail: detail || '' });
+    if (history.length > 300) history.splice(300);
+    localStorage.setItem(LS_HISTORY, JSON.stringify(history));
+  }
+
+  // ── Tab 顺序 ──────────────────────────────────────────────
+  function getTabOrder() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(LS_TAB_ORDER) || '[]');
+      if (saved.length) return saved;
+    } catch {}
+    return null;
+  }
+  function saveTabOrder(ids) { localStorage.setItem(LS_TAB_ORDER, JSON.stringify(ids)); }
 
   function getStageWeeks() {
     try { return { ...DEFAULT_STAGE_WEEKS, ...JSON.parse(localStorage.getItem(LS_WEEKS) || '{}') }; }
@@ -48,6 +74,41 @@
     catch { return []; }
   }
   function saveVirtualMembers(arr) { localStorage.setItem(LS_VIRTUAL, JSON.stringify(arr)); }
+
+  // ── 职能启用状态 ──────────────────────────────────────────
+  function getEnabledRoles() {
+    try { return JSON.parse(localStorage.getItem(LS_ENABLED) || '{}'); }
+    catch { return {}; }
+  }
+  function isRoleEnabled(roleId) {
+    const e = getEnabledRoles();
+    return e[roleId] !== false; // default: all enabled
+  }
+  function setRoleEnabled(roleId, enabled) {
+    const e = getEnabledRoles();
+    e[roleId] = enabled;
+    localStorage.setItem(LS_ENABLED, JSON.stringify(e));
+  }
+
+  // ── 自定义交付件 ───────────────────────────────────────────
+  function getAllCustom() {
+    try { return JSON.parse(localStorage.getItem(LS_CUSTOM) || '{}'); }
+    catch { return {}; }
+  }
+  function getCustomStageData(roleId, stageId) {
+    return getAllCustom()[`${roleId}_${stageId}`] ?? null;
+  }
+  function saveCustomStageData(roleId, stageId, data) {
+    const all = getAllCustom();
+    if (data === null) delete all[`${roleId}_${stageId}`];
+    else all[`${roleId}_${stageId}`] = data;
+    localStorage.setItem(LS_CUSTOM, JSON.stringify(all));
+  }
+  function getEffectiveStageData(roleData, stageId) {
+    const custom = getCustomStageData(roleData.id, stageId);
+    if (custom) return custom;
+    return roleData.stages[stageId] || { deliverables: [], models: [] };
+  }
 
   // ── 加载项目 ─────────────────────────────────────────────
   let project = await Store.getProject(projectId);
@@ -96,14 +157,49 @@
 
   const subnav = document.createElement('div');
   subnav.className = 'proj-subnav';
-  TABS.forEach(t => {
-    const btn = document.createElement('button');
-    btn.className = `proj-subnav-btn${t.id === activeTab ? ' active' : ''}`;
-    btn.textContent = t.label;
-    btn.dataset.tab = t.id;
-    btn.addEventListener('click', () => switchTab(t.id));
-    subnav.appendChild(btn);
-  });
+
+  function getOrderedTabs() {
+    const order = getTabOrder();
+    if (!order) return [...TABS];
+    const result = order.map(id => TABS.find(t => t.id === id)).filter(Boolean);
+    // append any tabs not in saved order (e.g. newly added tabs)
+    TABS.forEach(t => { if (!result.find(x => x.id === t.id)) result.push(t); });
+    return result;
+  }
+
+  let dragSrcId = null;
+  function renderSubnav() {
+    subnav.innerHTML = '';
+    getOrderedTabs().forEach(t => {
+      const btn = document.createElement('button');
+      btn.className = `proj-subnav-btn${t.id === activeTab ? ' active' : ''}`;
+      btn.textContent = t.label;
+      btn.dataset.tab = t.id;
+      btn.draggable = true;
+      btn.addEventListener('click', () => switchTab(t.id));
+      btn.addEventListener('dragstart', e => {
+        dragSrcId = t.id;
+        btn.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      btn.addEventListener('dragend', () => btn.classList.remove('dragging'));
+      btn.addEventListener('dragover', e => { e.preventDefault(); btn.classList.add('drag-over'); });
+      btn.addEventListener('dragleave', () => btn.classList.remove('drag-over'));
+      btn.addEventListener('drop', e => {
+        e.preventDefault();
+        btn.classList.remove('drag-over');
+        if (!dragSrcId || dragSrcId === t.id) return;
+        const ordered = getOrderedTabs();
+        const fromIdx = ordered.findIndex(x => x.id === dragSrcId);
+        const toIdx   = ordered.findIndex(x => x.id === t.id);
+        ordered.splice(toIdx, 0, ordered.splice(fromIdx, 1)[0]);
+        saveTabOrder(ordered.map(x => x.id));
+        renderSubnav();
+      });
+      subnav.appendChild(btn);
+    });
+  }
+  renderSubnav();
   page.appendChild(subnav);
 
   const tabContent = document.createElement('div');
@@ -114,9 +210,7 @@
 
   function switchTab(id) {
     activeTab = id;
-    subnav.querySelectorAll('.proj-subnav-btn').forEach(b => {
-      b.classList.toggle('active', b.dataset.tab === id);
-    });
+    renderSubnav();
     renderTab(id);
   }
 
@@ -126,7 +220,7 @@
       case 'timeline':     renderTimeline();     break;
       case 'deliverables': renderDeliverables(); break;
       case 'meetings':     renderMeetings();     break;
-      case 'kanban':       renderPlaceholder('看板', '可视化任务卡片（即将上线）'); break;
+      case 'kanban':       renderKanban(); break;
       case 'wiki':         renderPlaceholder('WIKI', '项目知识库（AI 接入后支持自动生成）'); break;
       case 'settings':     renderSettings();     break;
     }
@@ -142,7 +236,13 @@
     // 小标题 + 提交记录按钮
     const hdr = document.createElement('div');
     hdr.className = 'tab-section-header';
-    hdr.innerHTML = `<span class="tab-section-title">项目时间线</span><span style="font-size:12px;color:var(--text-muted)">点击角色行的 + 分配成员 · 点击周次可调整计划周期</span>`;
+    hdr.innerHTML = `<span class="tab-section-title">项目时间线</span><span style="font-size:12px;color:var(--text-muted)">点击周次可调整计划周期</span>`;
+    const cfgBtn = document.createElement('button');
+    cfgBtn.className = 'btn-cfg';
+    cfgBtn.textContent = '⚙ 配置';
+    cfgBtn.style.marginLeft = 'auto';
+    cfgBtn.addEventListener('click', openConfigPanel);
+    hdr.appendChild(cfgBtn);
     const addBtn = document.createElement('button');
     addBtn.className = 'btn-primary';
     addBtn.textContent = '＋ 提交记录';
@@ -177,11 +277,17 @@
     // 4. WEEK 行（新增，传入 updateTodayLine 回调）
     grid.appendChild(buildWeekRow(updateTodayLine));
     // 5. PDT 区块
-    grid.appendChild(buildSectionHeader('pdt', 'PDT — 产品开发团队', 'Product Development Team'));
-    PDT_ROLES.forEach(role => grid.appendChild(buildProjectRoleRow(role, 'pdt')));
+    const activePDT = PDT_ROLES.filter(r => isRoleEnabled(r.id));
+    if (activePDT.length > 0) {
+      grid.appendChild(buildSectionHeader('pdt', 'PDT — 产品开发团队', 'Product Development Team'));
+      activePDT.forEach(role => grid.appendChild(buildProjectRoleRow(role, 'pdt')));
+    }
     // 6. PCT 区块
-    grid.appendChild(buildSectionHeader('pct', 'PCT — 产品商业化团队', 'Product Commercial Team'));
-    PCT_ROLES.forEach(role => grid.appendChild(buildProjectRoleRow(role, 'pct')));
+    const activePCT = PCT_ROLES.filter(r => isRoleEnabled(r.id));
+    if (activePCT.length > 0) {
+      grid.appendChild(buildSectionHeader('pct', 'PCT — 产品商业化团队', 'Product Commercial Team'));
+      activePCT.forEach(role => grid.appendChild(buildProjectRoleRow(role, 'pct')));
+    }
 
     gridWrap.appendChild(grid);
     outer.appendChild(gridWrap);
@@ -366,6 +472,7 @@
           const weeks = getStageWeeks();
           weeks[stageId] = newW;
           saveStageWeeks(weeks);
+          if (newW !== w) logHistory('timeline', '调整周期', `${STAGE_LABELS[stageId]} → ${newW} 周`);
           // Re-render week row
           const newRow = buildWeekRow(onUpdate);
           row.parentNode.replaceChild(newRow, row);
@@ -515,7 +622,6 @@
     const currentIdx = STAGE_ORDER.indexOf(currentStage);
 
     STAGES.forEach((s, i) => {
-      const stageData = roleData.stages[s.id] || { deliverables: [], models: [] };
       const cell = document.createElement('div');
       cell.className = `stage-cell${roleData.isHighlight ? ' highlight' : ''}`;
       stageCells.push(cell);
@@ -529,28 +635,40 @@
         cell.style.outline = '1px solid #bfdbfe';
       }
 
-      if (stageData.deliverables.length > 0) {
-        const ul = document.createElement('ul');
-        ul.className = 'deliverable-list';
-        stageData.deliverables.forEach(d => {
-          const li = document.createElement('li');
-          li.className = 'deliverable-item';
-          li.innerHTML = `<span class="deliverable-bullet" style="background:${roleData.color}"></span><span>${d}</span>`;
-          ul.appendChild(li);
-        });
-        cell.appendChild(ul);
+      // 渲染单元格内容（可被刷新调用）
+      function renderCellContent() {
+        Array.from(cell.children).forEach(c => c.remove());
+
+        const stageData   = getEffectiveStageData(roleData, s.id);
+        const disabledSet = new Set(stageData.disabled || []);
+        const visibleDelivs = (stageData.deliverables || []).filter(d => !disabledSet.has(d));
+
+        if (visibleDelivs.length > 0) {
+          const ul = document.createElement('ul');
+          ul.className = 'deliverable-list';
+          visibleDelivs.forEach(d => {
+            const li = document.createElement('li');
+            li.className = 'deliverable-item';
+            li.innerHTML = `<span class="deliverable-bullet" style="background:${roleData.color}"></span><span>${d}</span>`;
+            ul.appendChild(li);
+          });
+          cell.appendChild(ul);
+        }
+        if (stageData.models && stageData.models.length > 0) {
+          const tw = document.createElement('div');
+          tw.className = 'model-tags';
+          stageData.models.forEach(m => {
+            const tag = document.createElement('span');
+            tag.className = 'model-tag';
+            tag.textContent = m;
+            tw.appendChild(tag);
+          });
+          cell.appendChild(tw);
+        }
+
       }
-      if (stageData.models && stageData.models.length > 0) {
-        const tw = document.createElement('div');
-        tw.className = 'model-tags';
-        stageData.models.forEach(m => {
-          const tag = document.createElement('span');
-          tag.className = 'model-tag';
-          tag.textContent = m;
-          tw.appendChild(tag);
-        });
-        cell.appendChild(tw);
-      }
+      renderCellContent();
+
       fragment.appendChild(cell);
     });
 
@@ -593,6 +711,8 @@
           <span class="assign-pop-tag">${{owner:'所有者',admin:'管理员',member:'成员'}[m.ipms_role]||'成员'}</span>`;
         item.addEventListener('click', () => {
           saveRoleAssignment(roleId, { name, userId: m.user_id, color, isVirtual: false });
+          const rl = [...PDT_ROLES, ...PCT_ROLES].find(r => r.id === roleId);
+          logHistory('timeline', '分配成员', `${rl ? rl.title : roleId} → ${name}`);
           popover.remove();
           refreshFn();
         });
@@ -618,6 +738,8 @@
           <span class="assign-pop-tag">测试</span>`;
         item.addEventListener('click', () => {
           saveRoleAssignment(roleId, { name: vm.name, userId: vm.id, color: vm.color||'#64748b', isVirtual: true });
+          const rl = [...PDT_ROLES, ...PCT_ROLES].find(r => r.id === roleId);
+          logHistory('timeline', '分配成员', `${rl ? rl.title : roleId} → ${vm.name}`);
           popover.remove();
           refreshFn();
         });
@@ -796,7 +918,9 @@
       const btn = overlay.querySelector('#d-save');
       btn.disabled = true; btn.textContent = '保存中…';
       try {
-        await Store.upsertDeliverable({ ...d, status: overlay.querySelector('#d-status').value, content: overlay.querySelector('#d-content').value.trim(), submitted_by: user.id, submitted_at: new Date().toISOString() });
+        const newStatus = overlay.querySelector('#d-status').value;
+        await Store.upsertDeliverable({ ...d, status: newStatus, content: overlay.querySelector('#d-content').value.trim(), submitted_by: user.id, submitted_at: new Date().toISOString() });
+        logHistory('deliverable', '更新交付件', `${d.name} · ${STAGE_LABELS[d.stage_id] || d.stage_id} → ${({pending:'待提交',in_progress:'进行中',submitted:'已提交',approved:'已批准'})[newStatus]||newStatus}`);
         close();
         renderDeliverables();
       } catch (err) { btn.disabled = false; btn.textContent = '保存'; alert('保存失败：' + (err.message || '')); }
@@ -912,6 +1036,7 @@
       const actionsRaw = overlay.querySelector('#m-actions').value.trim();
       try {
         await Store.addMeeting(projectId, { title, meetingDate: overlay.querySelector('#m-date').value, stageId: overlay.querySelector('#m-stage').value, agenda: overlay.querySelector('#m-agenda').value.trim(), minutes: overlay.querySelector('#m-minutes').value.trim(), actionItems: actionsRaw ? actionsRaw.split('\n').map(s=>s.replace(/^[-•]\s*/,'').trim()).filter(Boolean) : [] }, user.id);
+        logHistory('meeting', '新增会议', title);
         close(); await onSaved();
       } catch(err) { errEl.textContent = '保存失败：'+(err.message||''); errEl.style.display = 'block'; btn.disabled = false; btn.textContent = '保存'; }
     });
@@ -1009,8 +1134,10 @@
         vmList.querySelectorAll('.vm-del').forEach(btn => {
           btn.addEventListener('click', () => {
             const arr = getVirtualMembers();
+            const removed = arr[parseInt(btn.dataset.idx)];
             arr.splice(parseInt(btn.dataset.idx), 1);
             saveVirtualMembers(arr);
+            logHistory('settings', '删除测试成员', removed ? removed.name : '');
             renderVmSection();
           });
         });
@@ -1039,11 +1166,42 @@
         const color = VM_COLORS[arr.length % VM_COLORS.length];
         arr.push({ id: 'vm_' + Date.now(), name, desc, color });
         saveVirtualMembers(arr);
+        logHistory('settings', '添加测试成员', name);
         renderVmSection();
       });
     }
     renderVmSection();
     wrap.appendChild(vmSection);
+
+    // ── 职能配置 ──────────────────────────────────────────
+    const funcSection = document.createElement('div');
+    funcSection.className = 'settings-section';
+    funcSection.innerHTML = `<div class="settings-section-title">职能配置（Function Config）</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px">选择此项目包含的职能，禁用的职能不会出现在时间线和交付件中。</div>`;
+    const allRoles = [
+      ...PDT_ROLES.map(r => ({ ...r, team: 'PDT' })),
+      ...PCT_ROLES.map(r => ({ ...r, team: 'PCT' })),
+    ];
+    allRoles.forEach(role => {
+      const item = document.createElement('div');
+      item.className = 'func-config-item';
+      const checked = isRoleEnabled(role.id) ? 'checked' : '';
+      item.innerHTML = `
+        <div class="func-config-info">
+          <span class="func-config-badge ${role.team.toLowerCase()}">${role.team}</span>
+          <span class="func-config-name">${role.title}</span>
+          <span class="func-config-sub">${role.subtitle}</span>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" ${checked} />
+          <span class="toggle-slider"></span>
+        </label>`;
+      item.querySelector('input').addEventListener('change', e => {
+        setRoleEnabled(role.id, e.target.checked);
+      });
+      funcSection.appendChild(item);
+    });
+    wrap.appendChild(funcSection);
 
     // ── 危险操作 ──────────────────────────────────────────
     const dangerSection = document.createElement('div');
@@ -1071,6 +1229,7 @@
           status: document.getElementById('cfg-status').value,
         });
         document.getElementById('proj-title').textContent = project.name;
+        logHistory('settings', '更新项目信息', project.name);
         msg.style.color = '#22c55e'; msg.textContent = '已保存';
         setTimeout(() => { msg.textContent = ''; }, 2000);
       } catch(err) { msg.style.color = '#ef4444'; msg.textContent = '保存失败：'+(err.message||''); }
@@ -1087,6 +1246,7 @@
       if (!profiles || !profiles.length) { msgEl.style.color = '#ef4444'; msgEl.textContent = '未找到该用户'; return; }
       try {
         await Store.addMember(projectId, profiles[0].id, role);
+        logHistory('settings', '添加成员', profiles[0].name || email);
         msgEl.style.color = '#22c55e'; msgEl.textContent = `已添加 ${profiles[0].name || email}`;
         document.getElementById('add-email').value = '';
         setTimeout(() => renderSettings(), 800);
@@ -1098,6 +1258,318 @@
       try { await Store.deleteProject(projectId); window.location.href = 'projects.html'; }
       catch(err) { alert('删除失败：'+(err.message||'')); }
     });
+  }
+
+  // ============================================================
+  // 全局配置面板（右侧抽屉）
+  // ============================================================
+  function openConfigPanel() {
+    document.querySelectorAll('.cfg-overlay').forEach(e => e.remove());
+
+    const overlay = document.createElement('div');
+    overlay.className = 'cfg-overlay';
+
+    const panel = document.createElement('div');
+    panel.className = 'cfg-panel';
+
+    // ── 面板标题栏 ─────────────────────────────────────────
+    const panelHdr = document.createElement('div');
+    panelHdr.className = 'cfg-panel-hdr';
+    panelHdr.innerHTML = `<span class="cfg-panel-title">⚙ 时间线配置</span>`;
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'cfg-panel-close';
+    closeBtn.textContent = '✕';
+    panelHdr.appendChild(closeBtn);
+    panel.appendChild(panelHdr);
+
+    // ── 面板主体 ───────────────────────────────────────────
+    const body = document.createElement('div');
+    body.className = 'cfg-panel-body';
+
+    function buildTeamSection(roles, teamType, teamLabel) {
+      const section = document.createElement('div');
+
+      const teamHdr = document.createElement('div');
+      teamHdr.className = 'cfg-team-hdr';
+      teamHdr.innerHTML = `<span class="cfg-team-badge ${teamType}">${teamType.toUpperCase()}</span>${teamLabel}`;
+      section.appendChild(teamHdr);
+
+      roles.forEach(role => {
+        const roleEl = document.createElement('div');
+        roleEl.className = 'cfg-role';
+
+        // 角色标题行
+        const roleHdr = document.createElement('div');
+        roleHdr.className = 'cfg-role-hdr';
+        if (!isRoleEnabled(role.id)) roleHdr.style.opacity = '.5';
+
+        // 职能开关
+        const toggleLabel = document.createElement('label');
+        toggleLabel.className = 'toggle-switch';
+        const toggleInp = document.createElement('input');
+        toggleInp.type = 'checkbox';
+        toggleInp.checked = isRoleEnabled(role.id);
+        const toggleSlider = document.createElement('span');
+        toggleSlider.className = 'toggle-slider';
+        toggleLabel.appendChild(toggleInp);
+        toggleLabel.appendChild(toggleSlider);
+        toggleInp.addEventListener('change', () => {
+          setRoleEnabled(role.id, toggleInp.checked);
+          roleHdr.style.opacity = toggleInp.checked ? '' : '.5';
+          logHistory('timeline', toggleInp.checked ? '启用职能' : '禁用职能', role.title);
+        });
+
+        // 职能信息
+        const roleInfo = document.createElement('div');
+        roleInfo.className = 'cfg-role-info';
+        roleInfo.innerHTML = `<div class="cfg-role-name">${role.title}</div><div class="cfg-role-sub">${role.subtitle}</div>`;
+
+        // 成员分配（内联）
+        const assignWrap = document.createElement('div');
+        function renderInlineAssign() {
+          assignWrap.innerHTML = '';
+          const cur = getRoleAssignments()[role.id];
+          if (cur) {
+            const chip = document.createElement('div');
+            chip.className = 'role-assign-chip';
+            chip.title = '点击更改';
+            const av = document.createElement('div');
+            av.className = 'role-assign-avatar';
+            av.style.background = cur.color || '#2563eb';
+            av.textContent = (cur.name || '?').charAt(0).toUpperCase();
+            chip.appendChild(av);
+            chip.appendChild(document.createTextNode(cur.name));
+            chip.addEventListener('click', e => { e.stopPropagation(); openAssignPopover(role.id, chip, renderInlineAssign); });
+            assignWrap.appendChild(chip);
+          } else {
+            const plusBtn = document.createElement('button');
+            plusBtn.className = 'role-assign-btn';
+            plusBtn.title = '分配成员';
+            plusBtn.textContent = '+';
+            plusBtn.addEventListener('click', e => { e.stopPropagation(); openAssignPopover(role.id, plusBtn, renderInlineAssign); });
+            assignWrap.appendChild(plusBtn);
+          }
+        }
+        renderInlineAssign();
+
+        // 展开按钮
+        const expandBtn = document.createElement('button');
+        expandBtn.className = 'cfg-role-expand';
+        expandBtn.textContent = '▶';
+
+        roleHdr.appendChild(toggleLabel);
+        roleHdr.appendChild(roleInfo);
+        roleHdr.appendChild(assignWrap);
+        roleHdr.appendChild(expandBtn);
+
+        // 角色展开体（交付件开关）
+        const roleBody = document.createElement('div');
+        roleBody.className = 'cfg-role-body';
+
+        function buildRoleBody() {
+          roleBody.innerHTML = '';
+          STAGES.forEach(stage => {
+            const stageData = getEffectiveStageData(role, stage.id);
+            const allDelivs = stageData.deliverables || [];
+            if (!allDelivs.length) return;
+
+            const stageRow = document.createElement('div');
+            stageRow.className = 'cfg-stage-row';
+
+            const stageLabel = document.createElement('div');
+            stageLabel.className = 'cfg-stage-label';
+            stageLabel.innerHTML = `<span class="cfg-stage-code">${stage.code}</span>${stage.name}`;
+            stageRow.appendChild(stageLabel);
+
+            const disabledSet = new Set(stageData.disabled || []);
+
+            allDelivs.forEach(d => {
+              const delivRow = document.createElement('div');
+              delivRow.className = 'cfg-deliv-row';
+
+              const tog = document.createElement('label');
+              tog.className = 'toggle-switch';
+              const togInp = document.createElement('input');
+              togInp.type = 'checkbox';
+              togInp.checked = !disabledSet.has(d);
+              const togSlider = document.createElement('span');
+              togSlider.className = 'toggle-slider';
+              tog.appendChild(togInp);
+              tog.appendChild(togSlider);
+
+              const text = document.createElement('span');
+              text.className = 'cfg-deliv-text' + (disabledSet.has(d) ? ' off' : '');
+              text.textContent = d;
+
+              togInp.addEventListener('change', () => {
+                if (togInp.checked) { disabledSet.delete(d); text.className = 'cfg-deliv-text'; }
+                else { disabledSet.add(d); text.className = 'cfg-deliv-text off'; }
+                const effective = getEffectiveStageData(role, stage.id);
+                saveCustomStageData(role.id, stage.id, {
+                  deliverables: effective.deliverables || [],
+                  disabled: Array.from(disabledSet),
+                  models: effective.models || [],
+                });
+                logHistory('timeline', togInp.checked ? '启用交付件' : '禁用交付件', `${role.title} · ${stage.code} · ${d}`);
+              });
+
+              delivRow.appendChild(tog);
+              delivRow.appendChild(text);
+              stageRow.appendChild(delivRow);
+            });
+
+            roleBody.appendChild(stageRow);
+          });
+        }
+
+        let expanded = false;
+        expandBtn.addEventListener('click', () => {
+          expanded = !expanded;
+          expandBtn.textContent = expanded ? '▼' : '▶';
+          roleBody.classList.toggle('open', expanded);
+          if (expanded && !roleBody.children.length) buildRoleBody();
+        });
+
+        roleEl.appendChild(roleHdr);
+        roleEl.appendChild(roleBody);
+        section.appendChild(roleEl);
+      });
+
+      return section;
+    }
+
+    body.appendChild(buildTeamSection(PDT_ROLES, 'pdt', 'PDT — 产品开发团队'));
+    body.appendChild(buildTeamSection(PCT_ROLES, 'pct', 'PCT — 产品商业化团队'));
+    panel.appendChild(body);
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+
+    requestAnimationFrame(() => panel.classList.add('open'));
+
+    function closePanel() {
+      panel.classList.remove('open');
+      setTimeout(() => { overlay.remove(); renderTab('timeline'); }, 260);
+    }
+
+    closeBtn.addEventListener('click', closePanel);
+    overlay.addEventListener('click', e => { if (e.target === overlay) closePanel(); });
+  }
+
+  // ============================================================
+  // 阶段交付件配置 Modal
+  // ============================================================
+  function openStageCellEdit(roleData, stage, onSaved) {
+    document.querySelectorAll('.stage-edit-overlay').forEach(e => e.remove());
+
+    const customData  = getCustomStageData(roleData.id, stage.id);
+    const defaultData = roleData.stages[stage.id] || { deliverables: [], models: [] };
+
+    // allDelivs = 完整列表（含已关闭）；disabledSet = 当前关闭的条目文本集合
+    let allDelivs   = customData ? [...(customData.deliverables || [])] : [...(defaultData.deliverables || [])];
+    let disabledSet = new Set(customData ? (customData.disabled || []) : []);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay stage-edit-overlay';
+
+    function render() {
+      overlay.innerHTML = '';
+      const modal = document.createElement('div');
+      modal.className = 'modal';
+
+      const rowsHtml = allDelivs.map((d, i) => {
+        const on = !disabledSet.has(d);
+        return `<div class="deliv-edit-item" data-idx="${i}">
+          <label class="toggle-switch" style="flex-shrink:0">
+            <input type="checkbox" class="deliv-toggle" data-idx="${i}" ${on ? 'checked' : ''}/>
+            <span class="toggle-slider"></span>
+          </label>
+          <input class="form-input deliv-edit-input" value="${d.replace(/"/g,'&quot;')}" data-idx="${i}"
+            style="${on ? '' : 'opacity:.4;text-decoration:line-through;'}" />
+        </div>`;
+      }).join('') || '<div style="font-size:12px;color:var(--text-muted);padding:6px 0">暂无交付件</div>';
+
+      modal.innerHTML = `
+        <div class="modal-header">
+          <span class="modal-title">${roleData.title} · ${stage.code} 交付件配置</span>
+          <button class="modal-close">✕</button>
+        </div>
+        <div class="modal-body">
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">
+            关闭开关将在时间线中隐藏该交付件，数据保留可随时恢复。
+          </div>
+          <div class="form-group">
+            <label class="form-label">交付件列表</label>
+            <div id="del-list">${rowsHtml}</div>
+            <div class="deliv-add-row" style="margin-top:10px">
+              <input class="form-input" id="new-del-inp" placeholder="添加新交付件…" />
+              <button class="btn-ghost" id="add-del-btn">＋ 添加</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-ghost" id="se-cancel">取消</button>
+          <button class="btn-ghost" id="se-reset" style="color:#f59e0b">恢复默认</button>
+          <button class="btn-primary" id="se-save">保存</button>
+        </div>`;
+      overlay.appendChild(modal);
+
+      modal.querySelector('.modal-close').addEventListener('click', () => overlay.remove());
+      overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+      modal.querySelector('#se-cancel').addEventListener('click', () => overlay.remove());
+
+      // 开关切换：实时更新 disabled 集合 + 输入框样式
+      modal.querySelectorAll('.deliv-toggle').forEach(chk => {
+        chk.addEventListener('change', () => {
+          const idx = parseInt(chk.dataset.idx);
+          const inp = modal.querySelector(`.deliv-edit-input[data-idx="${idx}"]`);
+          if (chk.checked) {
+            disabledSet.delete(allDelivs[idx]);
+            if (inp) { inp.style.opacity = ''; inp.style.textDecoration = ''; }
+          } else {
+            disabledSet.add(allDelivs[idx]);
+            if (inp) { inp.style.opacity = '.4'; inp.style.textDecoration = 'line-through'; }
+          }
+        });
+      });
+
+      const newInp = modal.querySelector('#new-del-inp');
+      modal.querySelector('#add-del-btn').addEventListener('click', () => {
+        const v = newInp.value.trim();
+        if (!v) return;
+        allDelivs.push(v); // 新增默认开启
+        newInp.value = '';
+        render();
+      });
+      newInp.addEventListener('keydown', e => { if (e.key === 'Enter') modal.querySelector('#add-del-btn').click(); });
+
+      modal.querySelector('#se-reset').addEventListener('click', () => {
+        if (!confirm('确定恢复为默认交付件吗？')) return;
+        saveCustomStageData(roleData.id, stage.id, null);
+        overlay.remove();
+        onSaved();
+      });
+
+      modal.querySelector('#se-save').addEventListener('click', () => {
+        const inputs = modal.querySelectorAll('.deliv-edit-input');
+        const savedDelivs = allDelivs.map((_, i) => inputs[i]?.value.trim() || allDelivs[i]);
+        const newDisabled = [];
+        modal.querySelectorAll('.deliv-toggle').forEach(chk => {
+          if (!chk.checked) newDisabled.push(savedDelivs[parseInt(chk.dataset.idx)]);
+        });
+        const effective = getEffectiveStageData(roleData, stage.id);
+        saveCustomStageData(roleData.id, stage.id, {
+          deliverables: savedDelivs,
+          disabled: newDisabled,
+          models: effective.models || [],
+        });
+        logHistory('timeline', '配置交付件', `${roleData.title} · ${stage.code}`);
+        overlay.remove();
+        onSaved();
+      });
+    }
+
+    render();
+    document.body.appendChild(overlay);
   }
 
   // ============================================================
@@ -1187,6 +1659,112 @@
       }
       container.appendChild(item);
     });
+  }
+
+  // ============================================================
+  // TAB 4 — 看板（操作历史）
+  // ============================================================
+  function renderKanban() {
+    const wrap = document.createElement('div');
+    wrap.className = 'tab-kanban';
+
+    const hdr = document.createElement('div');
+    hdr.className = 'tab-section-header';
+    hdr.innerHTML = `<span class="tab-section-title">操作历史</span>`;
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'btn-ghost';
+    clearBtn.style.marginLeft = 'auto';
+    clearBtn.style.fontSize = '12px';
+    clearBtn.textContent = '清空记录';
+    clearBtn.addEventListener('click', () => {
+      if (!confirm('确定清空所有操作记录？')) return;
+      localStorage.removeItem(LS_HISTORY);
+      renderHistory();
+    });
+    hdr.appendChild(clearBtn);
+    wrap.appendChild(hdr);
+
+    const CAT_CONFIG = [
+      { id: 'all',         label: '全部',  color: '#475569' },
+      { id: 'timeline',    label: '时间线', color: '#2563eb' },
+      { id: 'deliverable', label: '交付件', color: '#7c3aed' },
+      { id: 'meeting',     label: '会议',  color: '#0891b2' },
+      { id: 'settings',    label: '设置',  color: '#64748b' },
+    ];
+
+    let activeFilter = 'all';
+
+    const filterBar = document.createElement('div');
+    filterBar.className = 'hist-filter-bar';
+    const filterBtns = {};
+    CAT_CONFIG.forEach(c => {
+      const btn = document.createElement('button');
+      btn.className = `hist-filter-btn${c.id === activeFilter ? ' active' : ''}`;
+      btn.textContent = c.label;
+      btn.style.setProperty('--cat-color', c.color);
+      btn.addEventListener('click', () => {
+        activeFilter = c.id;
+        Object.values(filterBtns).forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        renderHistory();
+      });
+      filterBtns[c.id] = btn;
+      filterBar.appendChild(btn);
+    });
+    wrap.appendChild(filterBar);
+
+    const histList = document.createElement('div');
+    histList.className = 'hist-list';
+    wrap.appendChild(histList);
+    tabContent.appendChild(wrap);
+
+    function renderHistory() {
+      histList.innerHTML = '';
+      const all = getHistory();
+      const filtered = activeFilter === 'all' ? all : all.filter(h => h.category === activeFilter);
+      const catMap = Object.fromEntries(CAT_CONFIG.map(c => [c.id, c]));
+
+      if (!filtered.length) {
+        histList.innerHTML = `<div class="empty-state" style="padding:40px 0">暂无操作记录</div>`;
+        return;
+      }
+
+      // Group by date
+      const groups = {};
+      filtered.forEach(h => {
+        const day = h.ts ? h.ts.slice(0, 10) : '未知日期';
+        if (!groups[day]) groups[day] = [];
+        groups[day].push(h);
+      });
+
+      Object.entries(groups).forEach(([day, items]) => {
+        const dayHdr = document.createElement('div');
+        dayHdr.className = 'hist-day-hdr';
+        const today = new Date().toISOString().slice(0, 10);
+        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+        dayHdr.textContent = day === today ? '今天' : day === yesterday ? '昨天' : day;
+        histList.appendChild(dayHdr);
+
+        items.forEach(h => {
+          const cat = catMap[h.category] || { label: h.category, color: '#64748b' };
+          const item = document.createElement('div');
+          item.className = 'hist-item';
+          item.innerHTML = `
+            <div class="hist-dot" style="background:${cat.color}"></div>
+            <div class="hist-body">
+              <div class="hist-top">
+                <span class="hist-cat-badge" style="background:${cat.color}18;color:${cat.color}">${cat.label}</span>
+                <span class="hist-action">${h.action}</span>
+                <span class="hist-time">${formatRelativeTime(h.ts)}</span>
+              </div>
+              ${h.detail ? `<div class="hist-detail">${h.detail}</div>` : ''}
+            </div>`;
+          histList.appendChild(item);
+        });
+      });
+    }
+
+    renderHistory();
   }
 
   // ── 占位符 Tab ────────────────────────────────────────────
