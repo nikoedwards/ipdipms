@@ -898,15 +898,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans
   padding: 16px 18px; background: var(--surface);
 }
 .meeting-card-top {
-  display: flex; justify-content: space-between; align-items: flex-start;
-  margin-bottom: 8px; gap: 12px;
+  display: flex; align-items: flex-start; gap: 12px; margin-bottom: 8px;
 }
-.meeting-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
-.meeting-date  { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.meeting-title { font-size: 15px; font-weight: 600; color: var(--text-primary); flex: 1; }
+.meeting-date  { font-size: 12px; color: var(--text-muted); white-space: nowrap; align-self: center; }
+.meeting-del-btn {
+  flex-shrink: 0; align-self: flex-start;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-muted); font-size: 13px; padding: 2px 4px; border-radius: 4px;
+  transition: color .12s, background .12s;
+}
+.meeting-del-btn:hover { color: #dc2626; background: #fee2e2; }
 .meeting-stage { font-size: 11px; color: #2563eb; font-weight: 500; margin-bottom: 8px; }
 .meeting-field { font-size: 13px; color: var(--text-secondary); margin-top: 8px; line-height: 1.6; }
+.meeting-minutes-text { white-space: pre-wrap; }
 .action-items-list { margin: 4px 0 0 16px; }
-.action-items-list li { margin-bottom: 2px; }
+.action-items-list li { margin-bottom: 4px; }
 .meeting-card-footer { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
 .modal-lg { max-width: 560px; }
 

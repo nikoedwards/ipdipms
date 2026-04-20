@@ -1492,18 +1492,82 @@
       const card = document.createElement('div');
       card.className = 'meeting-card';
       const actions = Array.isArray(m.action_items) ? m.action_items : [];
+      const attendeesStr = Array.isArray(m.attendees) && m.attendees.length
+        ? m.attendees.join('、') : '';
       card.innerHTML = `
         <div class="meeting-card-top">
           <span class="meeting-title">${m.title}</span>
           <span class="meeting-date">${m.meeting_date || formatDate(m.created_at)}</span>
+          <button class="meeting-del-btn" title="删除会议" data-id="${m.id}">✕</button>
         </div>
         ${m.stage_id ? `<div class="meeting-stage">${STAGE_LABELS[m.stage_id] || m.stage_id}</div>` : ''}
+        ${attendeesStr ? `<div class="meeting-field"><strong>参会人：</strong>${attendeesStr}</div>` : ''}
         ${m.agenda ? `<div class="meeting-field"><strong>议程：</strong>${m.agenda}</div>` : ''}
-        ${m.minutes ? `<div class="meeting-field"><strong>纪要：</strong>${m.minutes.replace(/\n/g,'<br>')}</div>` : ''}
+        ${m.minutes ? `<div class="meeting-field meeting-minutes"><strong>纪要：</strong><span class="meeting-minutes-text">${m.minutes.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>')}</span></div>` : ''}
         ${actions.length ? `<div class="meeting-field"><strong>行动项：</strong><ul class="action-items-list">${actions.map(a=>`<li>${typeof a==='string'?a:(a.text||JSON.stringify(a))}</li>`).join('')}</ul></div>` : ''}
         <div class="meeting-card-footer"><span style="font-size:12px;color:var(--text-muted)">${formatRelativeTime(m.created_at)}</span></div>`;
+
+      card.querySelector('.meeting-del-btn').addEventListener('click', async () => {
+        if (!confirm(`确定删除会议「${m.title}」？此操作不可恢复。`)) return;
+        try {
+          await Store.deleteMeeting(m.id);
+          logHistory('meeting', '删除会议', m.title);
+          card.remove();
+          if (!container.querySelector('.meeting-card')) {
+            container.innerHTML = `<div class="empty-state">暂无会议记录</div>`;
+          }
+          // update header count
+          const countEl = document.querySelector('.tab-section-title .tab-count');
+          if (countEl) countEl.textContent = parseInt(countEl.textContent || '1') - 1;
+        } catch (e) {
+          alert('删除失败：' + e.message);
+        }
+      });
+
       container.appendChild(card);
     });
+  }
+
+  // ── 项目成员上下文（供 LLM 识别 Speaker）────────────────
+  function buildMembersContext() {
+    const lines = [];
+    const seen  = new Set();
+
+    function add(name, role) {
+      if (!name || seen.has(name)) return;
+      seen.add(name);
+      lines.push(`- ${name}${role ? `（${role}）` : ''}`);
+    }
+
+    // 角色分配中的成员（最贴近实际）
+    const assignments  = getRoleAssignments();
+    const roleMap      = Object.fromEntries(ALL_ROLES.map(r => [r.id, r.label]));
+    Object.entries(assignments).forEach(([roleId, member]) => {
+      if (member) add(member, roleMap[roleId] || roleId);
+    });
+
+    // 虚拟成员
+    getVirtualMembers().forEach(vm => add(vm.name, vm.desc || ''));
+
+    // 项目 PDT / GTM Lead
+    if (project.pdt_lead) add(project.pdt_lead, 'PDT Lead');
+    if (project.gtm_lead) add(project.gtm_lead, 'GTM Lead');
+
+    return lines.length ? lines.join('\n') : '（项目暂无已分配成员）';
+  }
+
+  // ── 从行动项文本解析 TODO 字段 ───────────────────────────
+  function parseActionItemToTodo(str) {
+    // 格式：【负责人/部门】任务内容 — YYYY-MM-DD
+    const assigneeMatch = str.match(/^[【\[](.+?)[】\]]\s*/);
+    const dueDateMatch  = str.match(/[—–\-]\s*(\d{4}-\d{2}-\d{2})\s*$/);
+    const assignee = assigneeMatch ? assigneeMatch[1].trim() : '';
+    const dueDate  = dueDateMatch  ? dueDateMatch[1]         : '';
+    const title    = str
+      .replace(/^[【\[].*?[】\]]\s*/, '')
+      .replace(/\s*[—–\-]\s*\d{4}-\d{2}-\d{2}\s*$/, '')
+      .trim();
+    return { title: title || str, assignee, dueDate };
   }
 
   // ── 文件文本提取 ─────────────────────────────────────────
@@ -1702,19 +1766,50 @@
         if (!title) { errEl.textContent = '请填写会议标题'; errEl.style.display = 'block'; return; }
         const btn = overlay.querySelector('#m-save');
         btn.disabled = true; btn.textContent = '保存中…';
-        const actRaw      = overlay.querySelector('#m-actions').value.trim();
+        const actRaw       = overlay.querySelector('#m-actions').value.trim();
         const attendeesRaw = overlay.querySelector('#m-attendees').value.trim();
+        const actionItems  = actRaw
+          ? actRaw.split('\n').map(s => s.replace(/^[-•]\s*/, '').trim()).filter(Boolean)
+          : [];
         try {
-          await Store.addMeeting(projectId, {
+          const saved = await Store.addMeeting(projectId, {
             title,
             meetingDate:  overlay.querySelector('#m-date').value,
             stageId:      overlay.querySelector('#m-stage').value,
             attendees:    attendeesRaw ? attendeesRaw.split(/[、,，]+/).map(s=>s.trim()).filter(Boolean) : [],
             agenda:       overlay.querySelector('#m-agenda').value.trim(),
             minutes:      overlay.querySelector('#m-minutes').value.trim(),
-            actionItems:  actRaw ? actRaw.split('\n').map(s=>s.replace(/^[-•]\s*/,'').trim()).filter(Boolean) : [],
+            actionItems,
           }, user.id);
           logHistory('meeting', '新增会议', title);
+
+          // ── 自动从行动项生成 TODO ─────────────────────────
+          if (actionItems.length) {
+            const now = new Date().toISOString();
+            const stageId = overlay.querySelector('#m-stage').value || project.current_stage || '';
+            let todos = [];
+            try { todos = JSON.parse(localStorage.getItem(LS_TODOS) || '[]'); } catch {}
+            actionItems.forEach(item => {
+              const { title: taskTitle, assignee, dueDate } = parseActionItemToTodo(item);
+              if (!taskTitle) return;
+              todos.unshift({
+                id:        'todo_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5),
+                title:     taskTitle,
+                assignee,
+                dueDate,
+                priority:  'medium',
+                stage:     stageId,
+                notes:     `来自会议：${title}`,
+                status:    'open',
+                source:    'meeting',
+                meetingId: saved?.id || '',
+                createdAt: now,
+              });
+            });
+            localStorage.setItem(LS_TODOS, JSON.stringify(todos));
+            logHistory('todo', '会议生成待办', `${actionItems.length} 条来自「${title}」`);
+          }
+
           close();
           await onSaved();
         } catch (err) {
@@ -1752,8 +1847,12 @@
           return;
         }
 
-        // 3. 调用 LLM 解析
-        const raw    = await LLM.callLLM(LLM.PROMPTS.meetingExtract, `文档内容：\n\n${text}`);
+        // 3. 调用 LLM 解析（附带项目成员列表，供 Speaker 匹配）
+        const membersCtx = buildMembersContext();
+        const raw = await LLM.callLLM(
+          LLM.PROMPTS.meetingExtract,
+          `项目成员列表（用于识别 Speaker 身份，请将文档中 Speaker 占位符替换为对应真实姓名）：\n${membersCtx}\n\n文档内容：\n\n${text}`
+        );
         const result = LLM.parseResponse(raw);
 
         // 若解析到 actions（非标准 meetingExtract 格式），忽略

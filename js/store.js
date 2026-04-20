@@ -193,6 +193,11 @@ const Store = {
     return data;
   },
 
+  async deleteMeeting(id) {
+    const { error } = await sb.from('meetings').delete().eq('id', id);
+    if (error) { console.error('deleteMeeting:', error); throw error; }
+  },
+
   // ── 项目成员 ─────────────────────────────────────────────────
   async getMembers(projectId) {
     const { data, error } = await sb
