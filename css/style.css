@@ -1482,6 +1482,35 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans
   padding: 1px 7px; border-radius: 8px; letter-spacing: .03em;
 }
 .llm-banner-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
+.llm-run-btn { flex-shrink: 0; align-self: center; }
+
+/* ── LLM confirm modal ───────────────────────────────────── */
+.llm-confirm-summary {
+  font-size: 13px; color: var(--text-secondary);
+  line-height: 1.6; margin-bottom: 14px;
+  padding: 10px 12px;
+  background: #f0f9ff; border-radius: 7px;
+  border-left: 3px solid #38bdf8;
+}
+.llm-confirm-list { display: flex; flex-direction: column; gap: 8px; }
+.llm-confirm-action {
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.llm-confirm-action-hdr {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 6px;
+}
+.llm-action-type-badge {
+  font-size: 10px; font-weight: 700;
+  background: #2563eb18; color: #2563eb;
+  padding: 2px 8px; border-radius: 6px;
+}
+.llm-action-num { font-size: 11px; color: var(--text-muted); }
+.llm-confirm-action-desc { font-size: 13px; line-height: 1.6; color: var(--text-primary); }
+.llm-confirm-action-desc small { font-size: 11px; }
 
 /* ── To-do tab ────────────────────────────────────────────── */
 .tab-todo { max-width: 780px; }

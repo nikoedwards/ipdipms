@@ -194,6 +194,82 @@
     return cachedDbRows;
   }
 
+  // ── LLM 上下文 & 执行 ────────────────────────────────────
+  async function buildContext() {
+    const [meetings, deliverables] = await Promise.all([
+      Store.getMeetings(projectId),
+      getOrLoadDbRows(),
+    ]);
+    let todos = [], wikiEntries = [];
+    try { todos = JSON.parse(localStorage.getItem(LS_TODOS) || '[]'); } catch {}
+    try { wikiEntries = JSON.parse(localStorage.getItem(LS_WIKI) || '[]'); } catch {}
+    return LLM.buildProjectContext({
+      project,
+      todos,
+      wikiEntries,
+      meetings,
+      deliverables,
+      history: getHistory(),
+      milestones: getMilestones(),
+      roleAssignments: getRoleAssignments(),
+    });
+  }
+
+  function executeLLMActions(actions) {
+    let count = 0;
+    const now = new Date().toISOString();
+    actions.forEach(a => {
+      if (a.type === 'create_todo') {
+        let todos = [];
+        try { todos = JSON.parse(localStorage.getItem(LS_TODOS) || '[]'); } catch {}
+        todos.unshift({
+          id: 'todo_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5),
+          title: a.title || '（无标题）',
+          assignee: a.assignee || '',
+          dueDate: a.dueDate || '',
+          priority: a.priority || 'medium',
+          stage: a.stage || '',
+          notes: a.notes || '',
+          status: 'open',
+          source: 'llm',
+          createdAt: now,
+        });
+        localStorage.setItem(LS_TODOS, JSON.stringify(todos));
+        logHistory('todo', 'AI 生成待办', a.title || '');
+        count++;
+      }
+      if (a.type === 'create_wiki') {
+        let entries = [];
+        try { entries = JSON.parse(localStorage.getItem(LS_WIKI) || '[]'); } catch {}
+        entries.unshift({
+          id: 'wiki_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5),
+          title: a.title || '（无标题）',
+          category: a.category || 'other',
+          content: a.content || '',
+          sources: ['llm'],
+          createdAt: now,
+          updatedAt: now,
+        });
+        localStorage.setItem(LS_WIKI, JSON.stringify(entries));
+        logHistory('wiki', 'AI 创建 Wiki', a.title || '');
+        count++;
+      }
+      if (a.type === 'update_wiki') {
+        let entries = [];
+        try { entries = JSON.parse(localStorage.getItem(LS_WIKI) || '[]'); } catch {}
+        const idx = entries.findIndex(e => e.id === a.id || e.title === a.title);
+        if (idx >= 0) {
+          if (a.content) entries[idx].content = a.content;
+          entries[idx].updatedAt = now;
+          localStorage.setItem(LS_WIKI, JSON.stringify(entries));
+          logHistory('wiki', 'AI 更新 Wiki', a.title || '');
+          count++;
+        }
+      }
+    });
+    return count;
+  }
+
   // ── 页面骨架 ─────────────────────────────────────────────
   const page = document.createElement('div');
   page.className = 'page';
@@ -1446,7 +1522,13 @@
             <select class="form-select" id="m-stage"><option value="">无</option>${STAGE_ORDER.map(id=>`<option value="${id}">${STAGE_LABELS[id]}</option>`).join('')}</select></div>
           <div class="form-group"><label class="form-label">议程</label><textarea class="form-textarea" id="m-agenda" rows="2" placeholder="主要议题…"></textarea></div>
           <div class="form-group"><label class="form-label">会议纪要</label><textarea class="form-textarea" id="m-minutes" rows="5" placeholder="会议要点、讨论结果、重要决策…"></textarea></div>
-          <div class="form-group"><label class="form-label">行动项（每行一条）</label><textarea class="form-textarea" id="m-actions" rows="3" placeholder="- 张明 4/17 前提交降本方案"></textarea></div>
+          <div class="form-group">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+              <label class="form-label" style="margin:0">行动项（每行一条）</label>
+              ${LLM.isConfigured() ? '<button class="btn-ghost" id="m-ai-extract" style="font-size:12px;padding:2px 8px">🤖 AI 提取</button>' : ''}
+            </div>
+            <textarea class="form-textarea" id="m-actions" rows="3" placeholder="- 张明 4/17 前提交降本方案"></textarea>
+          </div>
           <div id="m-err" style="display:none;color:#ef4444;font-size:12px;margin-top:4px"></div>
         </div>
         <div class="modal-footer"><button class="btn-ghost" id="m-cancel">取消</button><button class="btn-primary" id="m-save">保存</button></div>
@@ -1457,6 +1539,41 @@
     overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
     overlay.querySelector('#m-date').value = new Date().toISOString().slice(0,10);
     if (project.current_stage) overlay.querySelector('#m-stage').value = project.current_stage;
+
+    const aiExtractBtn = overlay.querySelector('#m-ai-extract');
+    if (aiExtractBtn) {
+      aiExtractBtn.addEventListener('click', async () => {
+        const minutes = overlay.querySelector('#m-minutes').value.trim();
+        const agenda  = overlay.querySelector('#m-agenda').value.trim();
+        if (!minutes && !agenda) { alert('请先填写议程或会议纪要'); return; }
+        aiExtractBtn.disabled = true; aiExtractBtn.textContent = '分析中…';
+        try {
+          const raw = await LLM.callClaude(
+            LLM.PROMPTS.extractActionItems,
+            `会议议程：${agenda}\n\n会议纪要：${minutes}`
+          );
+          const result = LLM.parseResponse(raw);
+          // Fill action items textarea
+          if (result.extractedItems && result.extractedItems.length) {
+            overlay.querySelector('#m-actions').value = result.extractedItems.map(s => `- ${s}`).join('\n');
+          }
+          // Offer to also create todos
+          if (result.actions && result.actions.length) {
+            LLM.showConfirmModal({
+              title: 'AI 提取的行动项',
+              summary: (result.summary || '') + '  已填入行动项文本框，以下条目也将创建为待办：',
+              result,
+              onConfirm: (actions) => { executeLLMActions(actions); },
+            });
+          }
+        } catch (e) {
+          alert('AI 提取失败：' + e.message);
+        } finally {
+          aiExtractBtn.disabled = false; aiExtractBtn.textContent = '🤖 AI 提取';
+        }
+      });
+    }
+
     overlay.querySelector('#m-save').addEventListener('click', async () => {
       const title = overlay.querySelector('#m-title').value.trim();
       const errEl = overlay.querySelector('#m-err');
@@ -1654,6 +1771,82 @@
       msg.style.color = 'var(--text-muted)'; msg.textContent = '已清除';
       setTimeout(() => { msg.textContent = ''; }, 2000);
       if (activeTab === 'timeline') renderTab('timeline');
+    });
+
+    // ── AI 助手配置 ────────────────────────────────────────
+    const llmCfg = LLM.getConfig();
+    const aiSection = document.createElement('div');
+    aiSection.className = 'settings-section';
+    aiSection.innerHTML = `
+      <div class="settings-section-title">AI 助手配置</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">
+        填入 Anthropic API Key 后，Todo 和 Wiki 标签页将启用 AI 自动生成功能。
+        Key 仅存储在本地浏览器，不上传服务器。
+        <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" style="color:var(--accent)">获取 API Key →</a>
+      </div>
+      <div class="form-group">
+        <label class="form-label">API Key</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input class="form-input" id="llm-key" type="password" value="${llmCfg.apiKey || ''}" placeholder="sk-ant-api03-…" style="flex:1;font-family:monospace" />
+          <button class="btn-ghost" id="llm-key-toggle" style="white-space:nowrap">显示</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">模型</label>
+        <select class="form-select" id="llm-model" style="max-width:300px">
+          <option value="claude-sonnet-4-6"  ${(llmCfg.model||'claude-sonnet-4-6')==='claude-sonnet-4-6'?'selected':''}>Claude Sonnet 4.6（推荐）</option>
+          <option value="claude-haiku-4-5-20251001" ${llmCfg.model==='claude-haiku-4-5-20251001'?'selected':''}>Claude Haiku 4.5（更快更省）</option>
+          <option value="claude-opus-4-7" ${llmCfg.model==='claude-opus-4-7'?'selected':''}>Claude Opus 4.7（最强）</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn-primary" id="llm-save">保存配置</button>
+        <button class="btn-ghost" id="llm-test">测试连接</button>
+        <button class="btn-ghost" id="llm-clear" style="color:#dc2626">清除 Key</button>
+        <span id="llm-msg" style="font-size:12px;color:var(--text-muted)"></span>
+      </div>`;
+    wrap.appendChild(aiSection);
+
+    aiSection.querySelector('#llm-key-toggle').addEventListener('click', () => {
+      const inp = aiSection.querySelector('#llm-key');
+      const btn = aiSection.querySelector('#llm-key-toggle');
+      if (inp.type === 'password') { inp.type = 'text'; btn.textContent = '隐藏'; }
+      else { inp.type = 'password'; btn.textContent = '显示'; }
+    });
+    aiSection.querySelector('#llm-save').addEventListener('click', () => {
+      const apiKey = aiSection.querySelector('#llm-key').value.trim();
+      const model  = aiSection.querySelector('#llm-model').value;
+      LLM.saveConfig({ apiKey, model });
+      const msg = aiSection.querySelector('#llm-msg');
+      msg.style.color = '#22c55e'; msg.textContent = '已保存';
+      setTimeout(() => { msg.textContent = ''; }, 2000);
+      logHistory('settings', '更新 AI 配置', model);
+    });
+    aiSection.querySelector('#llm-test').addEventListener('click', async () => {
+      const btn = aiSection.querySelector('#llm-test');
+      const msg = aiSection.querySelector('#llm-msg');
+      // Save first with current inputs
+      LLM.saveConfig({
+        apiKey: aiSection.querySelector('#llm-key').value.trim(),
+        model:  aiSection.querySelector('#llm-model').value,
+      });
+      btn.disabled = true; btn.textContent = '测试中…';
+      msg.style.color = 'var(--text-muted)'; msg.textContent = '连接中…';
+      const result = await LLM.testConnection();
+      btn.disabled = false; btn.textContent = '测试连接';
+      if (result.ok) {
+        msg.style.color = '#22c55e'; msg.textContent = '✓ 连接成功';
+      } else {
+        msg.style.color = '#ef4444'; msg.textContent = '✗ ' + (result.error || '连接失败');
+      }
+    });
+    aiSection.querySelector('#llm-clear').addEventListener('click', () => {
+      if (!confirm('确定清除 API Key？')) return;
+      LLM.saveConfig({});
+      aiSection.querySelector('#llm-key').value = '';
+      const msg = aiSection.querySelector('#llm-msg');
+      msg.style.color = 'var(--text-muted)'; msg.textContent = '已清除';
+      setTimeout(() => { msg.textContent = ''; }, 2000);
     });
 
     // ── 危险操作 ──────────────────────────────────────────
@@ -2515,12 +2708,45 @@
     // LLM banner
     const banner = document.createElement('div');
     banner.className = 'llm-banner';
-    banner.innerHTML = `
-      <div class="llm-banner-icon">🤖</div>
-      <div class="llm-banner-body">
-        <div class="llm-banner-title">AI 待办生成 <span class="llm-badge">即将接入</span></div>
-        <div class="llm-banner-desc">接入 LLM 后，上传会议记录或文档，AI 将自动识别待办事项、设定截止时间并指派责任人；会议决策也将自动同步至此。</div>
-      </div>`;
+    if (LLM.isConfigured()) {
+      banner.innerHTML = `
+        <div class="llm-banner-icon">🤖</div>
+        <div class="llm-banner-body">
+          <div class="llm-banner-title">AI 待办生成</div>
+          <div class="llm-banner-desc">AI 将分析当前会议记录、交付件状态，自动建议待办事项。</div>
+        </div>
+        <button class="btn-primary llm-run-btn" id="todo-ai-btn">✨ AI 生成待办</button>`;
+      banner.querySelector('#todo-ai-btn').addEventListener('click', async () => {
+        const btn = banner.querySelector('#todo-ai-btn');
+        btn.disabled = true; btn.textContent = '分析中…';
+        try {
+          const ctx = await buildContext();
+          const raw = await LLM.callClaude(LLM.PROMPTS.todo, `项目上下文：\n\n${ctx}`);
+          const result = LLM.parseResponse(raw);
+          LLM.showConfirmModal({
+            title: 'AI 建议的待办',
+            summary: result.summary || '',
+            result,
+            onConfirm: (actions) => {
+              const n = executeLLMActions(actions);
+              renderTodo();
+              alert(`已创建 ${n} 条待办`);
+            },
+          });
+        } catch (e) {
+          alert('AI 调用失败：' + e.message);
+        } finally {
+          btn.disabled = false; btn.textContent = '✨ AI 生成待办';
+        }
+      });
+    } else {
+      banner.innerHTML = `
+        <div class="llm-banner-icon">🤖</div>
+        <div class="llm-banner-body">
+          <div class="llm-banner-title">AI 待办生成 <span class="llm-badge">未配置</span></div>
+          <div class="llm-banner-desc">在「设置」中配置 API Key 后，AI 将自动从会议记录和交付件中识别待办事项。</div>
+        </div>`;
+    }
     wrap.appendChild(banner);
 
     let statusFilter = 'all';
@@ -2802,12 +3028,45 @@
     // LLM banner
     const banner = document.createElement('div');
     banner.className = 'llm-banner';
-    banner.innerHTML = `
-      <div class="llm-banner-icon">🤖</div>
-      <div class="llm-banner-body">
-        <div class="llm-banner-title">AI 自动同步 <span class="llm-badge">即将接入</span></div>
-        <div class="llm-banner-desc">接入 LLM 后，Wiki 将自动从会议记录和交付件中提炼内容，去重整合，始终保持项目最新、最准确的知识状态。</div>
-      </div>`;
+    if (LLM.isConfigured()) {
+      banner.innerHTML = `
+        <div class="llm-banner-icon">🤖</div>
+        <div class="llm-banner-body">
+          <div class="llm-banner-title">AI 自动同步</div>
+          <div class="llm-banner-desc">AI 将从会议记录和交付件中提炼关键信息，创建或更新 Wiki 条目。</div>
+        </div>
+        <button class="btn-primary llm-run-btn" id="wiki-ai-btn">✨ AI 同步 Wiki</button>`;
+      banner.querySelector('#wiki-ai-btn').addEventListener('click', async () => {
+        const btn = banner.querySelector('#wiki-ai-btn');
+        btn.disabled = true; btn.textContent = '分析中…';
+        try {
+          const ctx = await buildContext();
+          const raw = await LLM.callClaude(LLM.PROMPTS.wiki, `项目上下文：\n\n${ctx}`);
+          const result = LLM.parseResponse(raw);
+          LLM.showConfirmModal({
+            title: 'AI 建议的 Wiki 更新',
+            summary: result.summary || '',
+            result,
+            onConfirm: (actions) => {
+              const n = executeLLMActions(actions);
+              renderWiki();
+              alert(`已同步 ${n} 条 Wiki 内容`);
+            },
+          });
+        } catch (e) {
+          alert('AI 调用失败：' + e.message);
+        } finally {
+          btn.disabled = false; btn.textContent = '✨ AI 同步 Wiki';
+        }
+      });
+    } else {
+      banner.innerHTML = `
+        <div class="llm-banner-icon">🤖</div>
+        <div class="llm-banner-body">
+          <div class="llm-banner-title">AI 自动同步 <span class="llm-badge">未配置</span></div>
+          <div class="llm-banner-desc">在「设置」中配置 API Key 后，Wiki 将自动从会议记录和交付件中提炼内容，去重整合。</div>
+        </div>`;
+    }
     wrap.appendChild(banner);
 
     // Split layout
