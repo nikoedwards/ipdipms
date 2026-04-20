@@ -169,6 +169,28 @@ JSON 格式：
   ]
 }
 \`\`\``,
+
+    meetingExtract: `你是一个专业的会议记录助手，服务于 IPD 产品管理团队。
+从用户上传的文档内容中，提取并整理所有会议信息。注意：
+- 日期格式统一为 YYYY-MM-DD（无法判断时返回空字符串）
+- 行动项尽量包含负责人和截止时间（如文档有提及）
+- 保留关键决策、数据、重要结论
+- 若某字段文档中无对应内容，返回空字符串或空数组
+
+只返回 JSON，包裹在 \`\`\`json 和 \`\`\` 之间，不要有其他文字：
+\`\`\`json
+{
+  "title": "会议标题（从文档标题或内容推断）",
+  "meeting_date": "YYYY-MM-DD 或空字符串",
+  "attendees": ["姓名1", "姓名2"],
+  "agenda": "议程摘要（1-3句，条目间用；分隔）",
+  "minutes": "会议纪要正文（保留关键决策、数据、结论，Markdown 格式）",
+  "action_items": [
+    "【负责人】任务内容 — 截止日期",
+    "【负责人】任务内容 — 截止日期"
+  ]
+}
+\`\`\``,
   };
 
   // ── 判断 provider ────────────────────────────────────────
@@ -274,13 +296,19 @@ JSON 格式：
   }
 
   // ── 解析 LLM 输出的 JSON ─────────────────────────────────
+  // Returns: action-schema  { actions:[], summary }
+  //       or meeting-schema { title, meeting_date, attendees, agenda, minutes, action_items }
+  //       on failure: { actions:[], summary:'...' }
   function parseResponse(text) {
     const jsonMatch = text.match(/```json\s*([\s\S]*?)```/);
-    const jsonStr = jsonMatch ? jsonMatch[1] : text;
+    const jsonStr   = jsonMatch ? jsonMatch[1] : text;
     try {
       const parsed = JSON.parse(jsonStr.trim());
+      // Action-schema
       if (Array.isArray(parsed.actions)) return parsed;
       if (Array.isArray(parsed)) return { actions: parsed, summary: '' };
+      // Meeting-schema: has 'title' at top level (not wrapped in actions)
+      if ('title' in parsed || 'minutes' in parsed || 'action_items' in parsed) return parsed;
       return { actions: [], summary: '' };
     } catch {
       return { actions: [], summary: '（无法解析 AI 输出）' };

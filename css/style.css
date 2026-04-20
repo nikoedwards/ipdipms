@@ -1753,3 +1753,41 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans
   transition: all .15s; font-family: inherit;
 }
 .btn-cfg:hover { background: #e2e8f0; color: var(--text-primary); border-color: #94a3b8; }
+
+/* ── Meeting upload modal ────────────────────────────────── */
+.mtg-upload-zone {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; padding: 48px 24px;
+  border: 2px dashed var(--border); border-radius: 12px;
+  background: var(--bg-surface);
+  cursor: pointer; transition: all .15s;
+  text-align: center;
+}
+.mtg-upload-zone:hover,
+.mtg-upload-zone.drag-over {
+  border-color: #2563eb; background: #eff6ff;
+}
+.mtg-upload-icon { font-size: 40px; }
+.mtg-upload-title { font-size: 15px; font-weight: 700; color: var(--text-primary); }
+.mtg-upload-hint  { font-size: 12px; color: var(--text-muted); }
+.mtg-upload-btn   { margin-top: 8px; }
+
+.mtg-processing-icon  { font-size: 48px; margin-bottom: 12px; }
+.mtg-processing-title { font-size: 16px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px; }
+.mtg-processing-file  { font-size: 12px; color: var(--text-muted); margin-bottom: 16px; }
+.mtg-processing-dots  { display: flex; gap: 4px; justify-content: center; }
+.mtg-processing-dots span {
+  width: 8px; height: 8px; border-radius: 50%; background: #2563eb;
+  animation: mtg-pulse 1.2s ease-in-out infinite;
+}
+.mtg-processing-dots span:nth-child(2) { animation-delay: .2s; }
+.mtg-processing-dots span:nth-child(3) { animation-delay: .4s; }
+@keyframes mtg-pulse { 0%,80%,100%{opacity:.2;transform:scale(.8)} 40%{opacity:1;transform:scale(1)} }
+
+.mtg-ai-badge {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; margin-bottom: 16px;
+  background: linear-gradient(135deg, #f0f9ff, #faf5ff);
+  border: 1px solid #bae6fd; border-radius: 8px;
+  font-size: 12px; color: #0369a1;
+}

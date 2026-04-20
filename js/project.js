@@ -1477,12 +1477,11 @@
     wrap.appendChild(list);
     tabContent.appendChild(wrap);
     addBtn.addEventListener('click', () => {
-      const modal = buildMeetingModal(async () => {
+      buildMeetingModal(async () => {
         const updated = await Store.getMeetings(projectId);
         renderMeetingList(list, updated);
         wrap.querySelector('.tab-count').textContent = updated.length;
       });
-      document.body.appendChild(modal);
     });
   }
 
@@ -1507,87 +1506,285 @@
     });
   }
 
+  // ── 文件文本提取 ─────────────────────────────────────────
+  function loadExternalScript(src) {
+    return new Promise((resolve, reject) => {
+      if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+      const s = document.createElement('script');
+      s.src = src; s.onload = resolve; s.onerror = () => reject(new Error(`加载失败: ${src}`));
+      document.head.appendChild(s);
+    });
+  }
+
+  async function extractFileText(file) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    const MAX_CHARS = 12000;
+
+    if (['txt', 'md', 'csv'].includes(ext)) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload  = e => resolve((e.target.result || '').slice(0, MAX_CHARS));
+        reader.onerror = () => reject(new Error('文件读取失败'));
+        reader.readAsText(file, 'UTF-8');
+      });
+    }
+
+    if (ext === 'docx') {
+      await loadExternalScript('https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js');
+      const buf = await file.arrayBuffer();
+      const result = await mammoth.extractRawText({ arrayBuffer: buf });
+      return (result.value || '').slice(0, MAX_CHARS);
+    }
+
+    if (['xlsx', 'xls'].includes(ext)) {
+      await loadExternalScript('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      let text = '';
+      wb.SheetNames.forEach(name => {
+        text += `[Sheet: ${name}]\n` + XLSX.utils.sheet_to_csv(wb.Sheets[name]) + '\n\n';
+      });
+      return text.slice(0, MAX_CHARS);
+    }
+
+    if (ext === 'pdf') {
+      await loadExternalScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
+      if (typeof pdfjsLib !== 'undefined') {
+        pdfjsLib.GlobalWorkerOptions.workerSrc =
+          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        const buf = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+        let text = '';
+        for (let i = 1; i <= Math.min(pdf.numPages, 20); i++) {
+          const page    = await pdf.getPage(i);
+          const content = await page.getTextContent();
+          text += content.items.map(it => it.str).join(' ') + '\n';
+        }
+        return text.slice(0, MAX_CHARS);
+      }
+    }
+
+    throw new Error(`暂不支持 .${ext} 格式，请使用 .docx .xlsx .txt .md .csv .pdf`);
+  }
+
+  // ── 会议新增 Modal（上传 → AI 解析 → 审核 → 提交）─────────
   function buildMeetingModal(onSaved) {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
-    overlay.innerHTML = `
-      <div class="modal modal-lg">
-        <div class="modal-header"><span class="modal-title">新增会议记录</span><button class="modal-close">✕</button></div>
-        <div class="modal-body">
-          <div class="form-row">
-            <div class="form-group"><label class="form-label">会议标题 *</label><input class="form-input" id="m-title" placeholder="例：GR3 评审会议" /></div>
-            <div class="form-group"><label class="form-label">会议日期</label><input class="form-input" id="m-date" type="date" /></div>
-          </div>
-          <div class="form-group"><label class="form-label">关联阶段</label>
-            <select class="form-select" id="m-stage"><option value="">无</option>${STAGE_ORDER.map(id=>`<option value="${id}">${STAGE_LABELS[id]}</option>`).join('')}</select></div>
-          <div class="form-group"><label class="form-label">议程</label><textarea class="form-textarea" id="m-agenda" rows="2" placeholder="主要议题…"></textarea></div>
-          <div class="form-group"><label class="form-label">会议纪要</label><textarea class="form-textarea" id="m-minutes" rows="5" placeholder="会议要点、讨论结果、重要决策…"></textarea></div>
-          <div class="form-group">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-              <label class="form-label" style="margin:0">行动项（每行一条）</label>
-              ${LLM.isConfigured() ? '<button class="btn-ghost" id="m-ai-extract" style="font-size:12px;padding:2px 8px">🤖 AI 提取</button>' : ''}
-            </div>
-            <textarea class="form-textarea" id="m-actions" rows="3" placeholder="- 张明 4/17 前提交降本方案"></textarea>
-          </div>
-          <div id="m-err" style="display:none;color:#ef4444;font-size:12px;margin-top:4px"></div>
-        </div>
-        <div class="modal-footer"><button class="btn-ghost" id="m-cancel">取消</button><button class="btn-primary" id="m-save">保存</button></div>
-      </div>`;
     const close = () => overlay.remove();
-    overlay.querySelector('.modal-close').addEventListener('click', close);
-    overlay.querySelector('#m-cancel').addEventListener('click', close);
-    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
-    overlay.querySelector('#m-date').value = new Date().toISOString().slice(0,10);
-    if (project.current_stage) overlay.querySelector('#m-stage').value = project.current_stage;
 
-    const aiExtractBtn = overlay.querySelector('#m-ai-extract');
-    if (aiExtractBtn) {
-      aiExtractBtn.addEventListener('click', async () => {
-        const minutes = overlay.querySelector('#m-minutes').value.trim();
-        const agenda  = overlay.querySelector('#m-agenda').value.trim();
-        if (!minutes && !agenda) { alert('请先填写议程或会议纪要'); return; }
-        aiExtractBtn.disabled = true; aiExtractBtn.textContent = '分析中…';
+    // ── Step 渲染器 ──────────────────────────────────────────
+    function showUploadStep() {
+      overlay.innerHTML = `
+        <div class="modal modal-lg">
+          <div class="modal-header">
+            <span class="modal-title">新增会议记录</span>
+            <button class="modal-close">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="mtg-upload-zone" id="mtg-drop">
+              <div class="mtg-upload-icon">📄</div>
+              <div class="mtg-upload-title">上传会议文件</div>
+              <div class="mtg-upload-hint">支持 .docx · .xlsx · .txt · .md · .csv · .pdf</div>
+              <div class="mtg-upload-hint" style="margin-top:4px">单文件最大 10 MB</div>
+              <input type="file" id="mtg-file-input" accept=".docx,.xlsx,.xls,.txt,.md,.csv,.pdf" style="display:none" />
+              <button class="btn-primary mtg-upload-btn" id="mtg-pick-btn">选择文件</button>
+            </div>
+            <div id="mtg-err" style="display:none;color:#ef4444;font-size:12px;margin-top:8px;text-align:center"></div>
+            ${!LLM.isConfigured() ? `<div style="margin-top:12px;padding:10px 12px;background:#fef3c7;border-radius:8px;font-size:12px;color:#92400e">
+              ⚠ 未配置 AI，上传后将直接进入编辑表单（不自动解析内容）。
+              <a href="#" onclick="switchTab('settings');return false" style="color:#92400e;font-weight:600">去配置 →</a>
+            </div>` : ''}
+          </div>
+          <div class="modal-footer"><button class="btn-ghost" id="mtg-cancel">取消</button></div>
+        </div>`;
+
+      overlay.querySelector('.modal-close').addEventListener('click', close);
+      overlay.querySelector('#mtg-cancel').addEventListener('click', close);
+      overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+      const fileInput = overlay.querySelector('#mtg-file-input');
+      overlay.querySelector('#mtg-pick-btn').addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', () => {
+        if (fileInput.files[0]) handleFile(fileInput.files[0]);
+      });
+
+      // Drag and drop
+      const zone = overlay.querySelector('#mtg-drop');
+      zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+      zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+      zone.addEventListener('drop', e => {
+        e.preventDefault(); zone.classList.remove('drag-over');
+        const f = e.dataTransfer.files[0];
+        if (f) handleFile(f);
+      });
+    }
+
+    function showProcessingStep(fileName) {
+      overlay.innerHTML = `
+        <div class="modal modal-lg">
+          <div class="modal-header">
+            <span class="modal-title">AI 解析中…</span>
+          </div>
+          <div class="modal-body" style="padding:48px 24px;text-align:center">
+            <div class="mtg-processing-icon">🤖</div>
+            <div class="mtg-processing-title">正在解析文件内容</div>
+            <div class="mtg-processing-file">${fileName}</div>
+            <div class="mtg-processing-dots"><span>.</span><span>.</span><span>.</span></div>
+          </div>
+        </div>`;
+    }
+
+    function showReviewStep(parsed, fileName) {
+      const stageOpts = `<option value="">无</option>${STAGE_ORDER.map(id =>
+        `<option value="${id}" ${project.current_stage===id?'selected':''}>${STAGE_LABELS[id]}</option>`
+      ).join('')}`;
+
+      overlay.innerHTML = `
+        <div class="modal modal-lg">
+          <div class="modal-header">
+            <span class="modal-title">确认会议内容</span>
+            <button class="modal-close">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="mtg-ai-badge">
+              🤖 AI 已从「${fileName}」提取以下内容，请确认或修改后提交
+            </div>
+            <div class="form-row">
+              <div class="form-group" style="flex:2">
+                <label class="form-label">会议标题 *</label>
+                <input class="form-input" id="m-title" value="${escHtml(parsed.title||'')}" placeholder="会议标题" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">会议日期</label>
+                <input class="form-input" id="m-date" type="date" value="${parsed.meeting_date || new Date().toISOString().slice(0,10)}" />
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">关联阶段</label>
+                <select class="form-select" id="m-stage">${stageOpts}</select>
+              </div>
+              <div class="form-group" style="flex:2">
+                <label class="form-label">参会人</label>
+                <input class="form-input" id="m-attendees" value="${escHtml((parsed.attendees||[]).join('、'))}" placeholder="张三、李四…" />
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">议程</label>
+              <textarea class="form-textarea" id="m-agenda" rows="2">${escHtml(parsed.agenda||'')}</textarea>
+            </div>
+            <div class="form-group">
+              <label class="form-label">会议纪要</label>
+              <textarea class="form-textarea" id="m-minutes" rows="6">${escHtml(parsed.minutes||'')}</textarea>
+            </div>
+            <div class="form-group">
+              <label class="form-label">行动项（每行一条）</label>
+              <textarea class="form-textarea" id="m-actions" rows="4">${escHtml((parsed.action_items||[]).join('\n'))}</textarea>
+            </div>
+            <div id="m-err" style="display:none;color:#ef4444;font-size:12px;margin-top:4px"></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn-ghost" id="m-reupload">重新上传</button>
+            <button class="btn-ghost" id="m-cancel">取消</button>
+            <button class="btn-primary" id="m-save">确认提交</button>
+          </div>
+        </div>`;
+
+      overlay.querySelector('.modal-close').addEventListener('click', close);
+      overlay.querySelector('#m-cancel').addEventListener('click', close);
+      overlay.querySelector('#m-reupload').addEventListener('click', showUploadStep);
+      overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+      overlay.querySelector('#m-save').addEventListener('click', async () => {
+        const title  = overlay.querySelector('#m-title').value.trim();
+        const errEl  = overlay.querySelector('#m-err');
+        if (!title) { errEl.textContent = '请填写会议标题'; errEl.style.display = 'block'; return; }
+        const btn = overlay.querySelector('#m-save');
+        btn.disabled = true; btn.textContent = '保存中…';
+        const actRaw      = overlay.querySelector('#m-actions').value.trim();
+        const attendeesRaw = overlay.querySelector('#m-attendees').value.trim();
         try {
-          const raw = await LLM.callLLM(
-            LLM.PROMPTS.extractActionItems,
-            `会议议程：${agenda}\n\n会议纪要：${minutes}`
-          );
-          const result = LLM.parseResponse(raw);
-          // Fill action items textarea
-          if (result.extractedItems && result.extractedItems.length) {
-            overlay.querySelector('#m-actions').value = result.extractedItems.map(s => `- ${s}`).join('\n');
-          }
-          // Offer to also create todos
-          if (result.actions && result.actions.length) {
-            LLM.showConfirmModal({
-              title: 'AI 提取的行动项',
-              summary: (result.summary || '') + '  已填入行动项文本框，以下条目也将创建为待办：',
-              result,
-              onConfirm: (actions) => { executeLLMActions(actions); },
-            });
-          }
-        } catch (e) {
-          alert('AI 提取失败：' + e.message);
-        } finally {
-          aiExtractBtn.disabled = false; aiExtractBtn.textContent = '🤖 AI 提取';
+          await Store.addMeeting(projectId, {
+            title,
+            meetingDate:  overlay.querySelector('#m-date').value,
+            stageId:      overlay.querySelector('#m-stage').value,
+            attendees:    attendeesRaw ? attendeesRaw.split(/[、,，]+/).map(s=>s.trim()).filter(Boolean) : [],
+            agenda:       overlay.querySelector('#m-agenda').value.trim(),
+            minutes:      overlay.querySelector('#m-minutes').value.trim(),
+            actionItems:  actRaw ? actRaw.split('\n').map(s=>s.replace(/^[-•]\s*/,'').trim()).filter(Boolean) : [],
+          }, user.id);
+          logHistory('meeting', '新增会议', title);
+          close();
+          await onSaved();
+        } catch (err) {
+          errEl.textContent = '保存失败：' + (err.message || '');
+          errEl.style.display = 'block';
+          btn.disabled = false; btn.textContent = '确认提交';
         }
       });
     }
 
-    overlay.querySelector('#m-save').addEventListener('click', async () => {
-      const title = overlay.querySelector('#m-title').value.trim();
-      const errEl = overlay.querySelector('#m-err');
-      if (!title) { errEl.textContent = '请填写会议标题'; errEl.style.display = 'block'; return; }
-      const btn = overlay.querySelector('#m-save');
-      btn.disabled = true; btn.textContent = '保存中…';
-      const actionsRaw = overlay.querySelector('#m-actions').value.trim();
+    // ── 主处理流程 ────────────────────────────────────────────
+    async function handleFile(file) {
+      if (file.size > 10 * 1024 * 1024) {
+        overlay.querySelector('#mtg-err').textContent = '文件超过 10 MB，请压缩后上传';
+        overlay.querySelector('#mtg-err').style.display = 'block';
+        return;
+      }
+
+      showProcessingStep(file.name);
+
       try {
-        await Store.addMeeting(projectId, { title, meetingDate: overlay.querySelector('#m-date').value, stageId: overlay.querySelector('#m-stage').value, agenda: overlay.querySelector('#m-agenda').value.trim(), minutes: overlay.querySelector('#m-minutes').value.trim(), actionItems: actionsRaw ? actionsRaw.split('\n').map(s=>s.replace(/^[-•]\s*/,'').trim()).filter(Boolean) : [] }, user.id);
-        logHistory('meeting', '新增会议', title);
-        close(); await onSaved();
-      } catch(err) { errEl.textContent = '保存失败：'+(err.message||''); errEl.style.display = 'block'; btn.disabled = false; btn.textContent = '保存'; }
-    });
+        // 1. 提取文本
+        let text;
+        try {
+          text = await extractFileText(file);
+        } catch (e) {
+          // 提取失败 → 进入空白编辑表单
+          showReviewStep({}, file.name);
+          return;
+        }
+
+        // 2. 若 LLM 未配置 → 直接进入编辑表单
+        if (!LLM.isConfigured()) {
+          showReviewStep({ minutes: text }, file.name);
+          return;
+        }
+
+        // 3. 调用 LLM 解析
+        const raw    = await LLM.callLLM(LLM.PROMPTS.meetingExtract, `文档内容：\n\n${text}`);
+        const result = LLM.parseResponse(raw);
+
+        // 若解析到 actions（非标准 meetingExtract 格式），忽略
+        const parsed = result.actions ? {} : result;
+        // meetingExtract 直接返回顶层字段
+        const meeting = {
+          title:        result.title        || parsed.title        || '',
+          meeting_date: result.meeting_date || parsed.meeting_date || '',
+          attendees:    result.attendees    || parsed.attendees    || [],
+          agenda:       result.agenda       || parsed.agenda       || '',
+          minutes:      result.minutes      || parsed.minutes      || text,
+          action_items: result.action_items || parsed.action_items || [],
+        };
+
+        showReviewStep(meeting, file.name);
+      } catch (e) {
+        showReviewStep({ minutes: '' }, file.name);
+        setTimeout(() => {
+          const err = overlay.querySelector('#m-err');
+          if (err) { err.textContent = 'AI 解析失败：' + e.message; err.style.display = 'block'; }
+        }, 100);
+      }
+    }
+
+    showUploadStep();
+    document.body.appendChild(overlay);
     return overlay;
+  }
+
+  function escHtml(str) {
+    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
   // ============================================================
