@@ -1548,7 +1548,7 @@
         if (!minutes && !agenda) { alert('请先填写议程或会议纪要'); return; }
         aiExtractBtn.disabled = true; aiExtractBtn.textContent = '分析中…';
         try {
-          const raw = await LLM.callClaude(
+          const raw = await LLM.callLLM(
             LLM.PROMPTS.extractActionItems,
             `会议议程：${agenda}\n\n会议纪要：${minutes}`
           );
@@ -1775,29 +1775,57 @@
 
     // ── AI 助手配置 ────────────────────────────────────────
     const llmCfg = LLM.getConfig();
+
+    // Build provider + model options
+    const PROVIDER_LINKS = {
+      anthropic:     'https://console.anthropic.com/settings/keys',
+      qwen:          'https://bailian.console.aliyun.com/',
+      openai_compat: '',
+    };
+    const currentProvider = llmCfg.provider || LLM.detectProvider(llmCfg.model, llmCfg.baseUrl);
+
+    function buildModelOptions(provider, currentModel) {
+      const p = LLM.PROVIDERS[provider];
+      if (!p || !p.models.length) return '<option value="">（请手动输入）</option>';
+      return p.models.map(m => `<option value="${m.id}" ${currentModel === m.id ? 'selected' : ''}>${m.label}</option>`).join('');
+    }
+
     const aiSection = document.createElement('div');
     aiSection.className = 'settings-section';
     aiSection.innerHTML = `
       <div class="settings-section-title">AI 助手配置</div>
       <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">
-        填入 Anthropic API Key 后，Todo 和 Wiki 标签页将启用 AI 自动生成功能。
-        Key 仅存储在本地浏览器，不上传服务器。
-        <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" style="color:var(--accent)">获取 API Key →</a>
+        API Key 仅存储在本地浏览器，不上传服务器。
+        <span id="llm-key-link"></span>
+      </div>
+      <div class="form-group">
+        <label class="form-label">服务商</label>
+        <select class="form-select" id="llm-provider" style="max-width:280px">
+          <option value="anthropic"     ${currentProvider==='anthropic'?'selected':''}>Anthropic (Claude)</option>
+          <option value="qwen"          ${currentProvider==='qwen'?'selected':''}>通义千问 (DashScope)</option>
+          <option value="openai_compat" ${currentProvider==='openai_compat'?'selected':''}>OpenAI 兼容（自定义）</option>
+        </select>
       </div>
       <div class="form-group">
         <label class="form-label">API Key</label>
         <div style="display:flex;gap:8px;align-items:center">
-          <input class="form-input" id="llm-key" type="password" value="${llmCfg.apiKey || ''}" placeholder="sk-ant-api03-…" style="flex:1;font-family:monospace" />
+          <input class="form-input" id="llm-key" type="password" value="${llmCfg.apiKey || ''}" placeholder="" style="flex:1;font-family:monospace" />
           <button class="btn-ghost" id="llm-key-toggle" style="white-space:nowrap">显示</button>
         </div>
       </div>
-      <div class="form-group">
+      <div class="form-group" id="llm-model-group">
         <label class="form-label">模型</label>
-        <select class="form-select" id="llm-model" style="max-width:300px">
-          <option value="claude-sonnet-4-6"  ${(llmCfg.model||'claude-sonnet-4-6')==='claude-sonnet-4-6'?'selected':''}>Claude Sonnet 4.6（推荐）</option>
-          <option value="claude-haiku-4-5-20251001" ${llmCfg.model==='claude-haiku-4-5-20251001'?'selected':''}>Claude Haiku 4.5（更快更省）</option>
-          <option value="claude-opus-4-7" ${llmCfg.model==='claude-opus-4-7'?'selected':''}>Claude Opus 4.7（最强）</option>
+        <select class="form-select" id="llm-model" style="max-width:320px">
+          ${buildModelOptions(currentProvider, llmCfg.model)}
         </select>
+      </div>
+      <div class="form-group" id="llm-custom-model-group" style="${llmCfg.provider==='openai_compat'?'':'display:none'}">
+        <label class="form-label">模型 ID（手动填写）</label>
+        <input class="form-input" id="llm-custom-model" value="${llmCfg.model||''}" placeholder="例：qwen3-235b-a22b" style="max-width:320px" />
+      </div>
+      <div class="form-group" id="llm-baseurl-group" style="${llmCfg.provider==='openai_compat'?'':'display:none'}">
+        <label class="form-label">Base URL（OpenAI 兼容）</label>
+        <input class="form-input" id="llm-baseurl" value="${llmCfg.baseUrl||''}" placeholder="https://…/v1" style="max-width:400px" />
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button class="btn-primary" id="llm-save">保存配置</button>
@@ -1807,29 +1835,65 @@
       </div>`;
     wrap.appendChild(aiSection);
 
+    // Provider change → update model dropdown and show/hide custom fields
+    function updateProviderUI(provider) {
+      const modelSel = aiSection.querySelector('#llm-model');
+      const customModelGrp = aiSection.querySelector('#llm-custom-model-group');
+      const baseurlGrp = aiSection.querySelector('#llm-baseurl-group');
+      const modelGrp = aiSection.querySelector('#llm-model-group');
+      const keyLink = aiSection.querySelector('#llm-key-link');
+      const keyInp = aiSection.querySelector('#llm-key');
+
+      const link = PROVIDER_LINKS[provider];
+      keyLink.innerHTML = link ? `<a href="${link}" target="_blank" rel="noopener" style="color:var(--accent)">获取 API Key →</a>` : '';
+
+      if (provider === 'openai_compat') {
+        modelGrp.style.display = 'none';
+        customModelGrp.style.display = '';
+        baseurlGrp.style.display = '';
+        keyInp.placeholder = 'sk-…';
+      } else {
+        modelGrp.style.display = '';
+        customModelGrp.style.display = 'none';
+        baseurlGrp.style.display = 'none';
+        modelSel.innerHTML = buildModelOptions(provider, modelSel.value);
+        keyInp.placeholder = provider === 'qwen' ? 'sk-…（DashScope API Key）' : 'sk-ant-api03-…';
+      }
+    }
+    updateProviderUI(currentProvider);
+
+    aiSection.querySelector('#llm-provider').addEventListener('change', function () {
+      updateProviderUI(this.value);
+    });
     aiSection.querySelector('#llm-key-toggle').addEventListener('click', () => {
       const inp = aiSection.querySelector('#llm-key');
       const btn = aiSection.querySelector('#llm-key-toggle');
       if (inp.type === 'password') { inp.type = 'text'; btn.textContent = '隐藏'; }
       else { inp.type = 'password'; btn.textContent = '显示'; }
     });
+
+    function collectLLMConfig() {
+      const provider = aiSection.querySelector('#llm-provider').value;
+      const apiKey   = aiSection.querySelector('#llm-key').value.trim();
+      const baseUrl  = aiSection.querySelector('#llm-baseurl')?.value.trim() || '';
+      const model    = provider === 'openai_compat'
+        ? aiSection.querySelector('#llm-custom-model').value.trim()
+        : aiSection.querySelector('#llm-model').value;
+      return { provider, apiKey, model, baseUrl: baseUrl || undefined };
+    }
+
     aiSection.querySelector('#llm-save').addEventListener('click', () => {
-      const apiKey = aiSection.querySelector('#llm-key').value.trim();
-      const model  = aiSection.querySelector('#llm-model').value;
-      LLM.saveConfig({ apiKey, model });
+      const cfg = collectLLMConfig();
+      LLM.saveConfig(cfg);
       const msg = aiSection.querySelector('#llm-msg');
       msg.style.color = '#22c55e'; msg.textContent = '已保存';
       setTimeout(() => { msg.textContent = ''; }, 2000);
-      logHistory('settings', '更新 AI 配置', model);
+      logHistory('settings', '更新 AI 配置', cfg.model || cfg.provider);
     });
     aiSection.querySelector('#llm-test').addEventListener('click', async () => {
       const btn = aiSection.querySelector('#llm-test');
       const msg = aiSection.querySelector('#llm-msg');
-      // Save first with current inputs
-      LLM.saveConfig({
-        apiKey: aiSection.querySelector('#llm-key').value.trim(),
-        model:  aiSection.querySelector('#llm-model').value,
-      });
+      LLM.saveConfig(collectLLMConfig());
       btn.disabled = true; btn.textContent = '测试中…';
       msg.style.color = 'var(--text-muted)'; msg.textContent = '连接中…';
       const result = await LLM.testConnection();
@@ -2721,7 +2785,7 @@
         btn.disabled = true; btn.textContent = '分析中…';
         try {
           const ctx = await buildContext();
-          const raw = await LLM.callClaude(LLM.PROMPTS.todo, `项目上下文：\n\n${ctx}`);
+          const raw = await LLM.callLLM(LLM.PROMPTS.todo, `项目上下文：\n\n${ctx}`);
           const result = LLM.parseResponse(raw);
           LLM.showConfirmModal({
             title: 'AI 建议的待办',
@@ -3041,7 +3105,7 @@
         btn.disabled = true; btn.textContent = '分析中…';
         try {
           const ctx = await buildContext();
-          const raw = await LLM.callClaude(LLM.PROMPTS.wiki, `项目上下文：\n\n${ctx}`);
+          const raw = await LLM.callLLM(LLM.PROMPTS.wiki, `项目上下文：\n\n${ctx}`);
           const result = LLM.parseResponse(raw);
           LLM.showConfirmModal({
             title: 'AI 建议的 Wiki 更新',

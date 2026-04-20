@@ -171,11 +171,58 @@ JSON 格式：
 \`\`\``,
   };
 
-  // ── 调用 Claude API ──────────────────────────────────────
-  async function callClaude(systemPrompt, userMessage) {
-    const { apiKey, model } = getConfig();
+  // ── 判断 provider ────────────────────────────────────────
+  const PROVIDERS = {
+    anthropic: {
+      label: 'Anthropic',
+      models: [
+        { id: 'claude-sonnet-4-6',          label: 'Claude Sonnet 4.6（推荐）' },
+        { id: 'claude-haiku-4-5-20251001',  label: 'Claude Haiku 4.5（快速）' },
+        { id: 'claude-opus-4-7',            label: 'Claude Opus 4.7（最强）' },
+      ],
+    },
+    qwen: {
+      label: '通义千问 (DashScope)',
+      models: [
+        { id: 'qwen3-235b-a22b',   label: 'Qwen3-235B-A22B' },
+        { id: 'qwen-plus',         label: 'Qwen-Plus（平衡）' },
+        { id: 'qwen-turbo',        label: 'Qwen-Turbo（快速）' },
+        { id: 'qwen-max',          label: 'Qwen-Max（最强）' },
+      ],
+    },
+    openai_compat: {
+      label: 'OpenAI 兼容（自定义）',
+      models: [],
+    },
+  };
+
+  function detectProvider(model, baseUrl) {
+    if (baseUrl) return 'openai_compat';
+    if (!model) return 'anthropic';
+    if (model.startsWith('qwen') || model.startsWith('qwq')) return 'qwen';
+    if (model.startsWith('claude')) return 'anthropic';
+    return 'openai_compat';
+  }
+
+  // ── 统一 LLM 调用入口 ────────────────────────────────────
+  async function callLLM(systemPrompt, userMessage) {
+    const { apiKey, model, baseUrl } = getConfig();
     if (!apiKey) throw new Error('未配置 API Key，请先在「设置」中填入');
 
+    const provider = detectProvider(model, baseUrl);
+
+    if (provider === 'anthropic') {
+      return _callAnthropic(systemPrompt, userMessage, apiKey, model);
+    } else {
+      // OpenAI-compatible: Qwen DashScope, custom, etc.
+      const endpoint = baseUrl
+        ? baseUrl.replace(/\/$/, '') + '/chat/completions'
+        : 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
+      return _callOpenAICompat(systemPrompt, userMessage, apiKey, model, endpoint);
+    }
+  }
+
+  async function _callAnthropic(systemPrompt, userMessage, apiKey, model) {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -191,15 +238,39 @@ JSON 格式：
         messages: [{ role: 'user', content: userMessage }],
       }),
     });
+    if (!response.ok) {
+      let msg = `Anthropic API 错误 ${response.status}`;
+      try { const err = await response.json(); msg = err.error?.message || msg; } catch {}
+      throw new Error(msg);
+    }
+    const data = await response.json();
+    return data.content?.[0]?.text || '';
+  }
 
+  async function _callOpenAICompat(systemPrompt, userMessage, apiKey, model, endpoint) {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: model || 'qwen-plus',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user',   content: userMessage  },
+        ],
+        // Qwen3 thinking mode: disable for structured JSON output
+        enable_thinking: false,
+      }),
+    });
     if (!response.ok) {
       let msg = `API 错误 ${response.status}`;
       try { const err = await response.json(); msg = err.error?.message || msg; } catch {}
       throw new Error(msg);
     }
-
     const data = await response.json();
-    return data.content?.[0]?.text || '';
+    return data.choices?.[0]?.message?.content || '';
   }
 
   // ── 解析 LLM 输出的 JSON ─────────────────────────────────
@@ -282,7 +353,7 @@ JSON 格式：
   // ── 测试连接 ─────────────────────────────────────────────
   async function testConnection() {
     try {
-      const text = await callClaude('Reply with exactly: CONNECTED', 'ping');
+      const text = await callLLM('You are a helpful assistant. Reply concisely.', '回复"连接成功"三个字');
       return { ok: true, text };
     } catch (e) {
       return { ok: false, error: e.message };
@@ -292,8 +363,8 @@ JSON 格式：
   return {
     getConfig, saveConfig, isConfigured,
     buildProjectContext,
-    PROMPTS,
-    callClaude, parseResponse,
+    PROMPTS, PROVIDERS, detectProvider,
+    callLLM, parseResponse,
     showConfirmModal,
     testConnection,
   };
